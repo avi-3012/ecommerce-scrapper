@@ -1,0 +1,35 @@
+# Keep the Docker build context small and free of secrets / junk.
+# Everything is rebuilt inside the image, so local artifacts are excluded.
+
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+
+# Secrets — never ship real env files into an image
+.env
+.env.*
+!.env.example
+deploy/.env.staging
+deploy/.env.production
+
+# VCS / tooling
+.git
+.githooks
+.github
+
+# The separately-cloned comparison app must never be part of this image
+AMAZON-FLIPKART-TRACKING
+
+# Local ops output
+backups
+coverage
+**/*.log
+
+# Editor / OS noise
+.DS_Store
+.vscode
+.idea
+
+# Playwright browsers come from the base image, not the repo
+**/playwright-report
+**/test-results

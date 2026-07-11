@@ -1,0 +1,6 @@
+# Automatic HTTPS on the environment's hostname; reverse proxy to the API,
+# which serves both /api and the SPA.
+{$SITE_HOSTNAME} {
+	encode gzip
+	reverse_proxy api:3000
+}

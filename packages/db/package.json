@@ -1,0 +1,39 @@
+{
+  "name": "@pricepulse/db",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "generate": "prisma generate",
+    "migrate": "dotenv -e ../../.env -- prisma migrate deploy",
+    "migrate:status": "dotenv -e ../../.env -- prisma migrate status",
+    "seed": "dotenv -e ../../.env -- tsx src/seed.ts",
+    "migrate:deploy": "prisma migrate deploy",
+    "seed:prod": "node dist/seed.js",
+    "postinstall": "prisma generate"
+  },
+  "dependencies": {
+    "@pricepulse/shared": "workspace:*",
+    "@prisma/client": "^6.2.1",
+    "argon2": "^0.41.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "dotenv-cli": "^8.0.0",
+    "prisma": "^6.2.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
+  }
+}

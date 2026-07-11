@@ -1,0 +1,23 @@
+# Local development: only the database runs in Docker; apps run on the host
+# with hot reload (`make dev`). Same Postgres major as staging/production.
+name: pricepulse-dev
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: pricepulse
+      POSTGRES_PASSWORD: pricepulse
+      POSTGRES_DB: pricepulse
+    ports:
+      - '5432:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U pricepulse -d pricepulse']
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+volumes:
+  pgdata:

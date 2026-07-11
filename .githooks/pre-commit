@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Pre-commit hook (WP-0.1): reject mis-formatted or lint-failing staged files.
+# Enabled via `git config core.hooksPath .githooks` (done by `make hooks`,
+# documented in the README).
+set -euo pipefail
+
+staged=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '\.(ts|tsx|js|mjs|cjs|json|md|yaml|yml)$' || true)
+[ -z "$staged" ] && exit 0
+
+echo "pre-commit: prettier check"
+pnpm exec prettier --check $staged
+
+ts_staged=$(echo "$staged" | grep -E '\.(ts|tsx|mjs)$' || true)
+if [ -n "$ts_staged" ]; then
+  echo "pre-commit: eslint"
+  pnpm exec eslint $ts_staged
+fi

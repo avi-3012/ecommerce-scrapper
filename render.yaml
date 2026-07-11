@@ -1,0 +1,76 @@
+# PricePulse — Render Blueprint (Infrastructure as Code).
+#
+# Provisions everything: a managed PostgreSQL, the API web service (which also
+# serves the dashboard SPA), and the always-on monitoring worker. Both services
+# build from one Docker image (deploy/Dockerfile.render) and differ only by the
+# command they run.
+#
+# Deploy: Render Dashboard → New → Blueprint → pick this repo. See
+# docs/DEPLOY-RENDER.md for the full walkthrough and the two secrets you set.
+
+databases:
+  - name: pricepulse-db
+    plan: free # 30-day trial DB; switch to a paid plan (e.g. basic-256mb) for real use
+    region: singapore # closest Render region to India / the marketplaces
+    postgresMajorVersion: '16'
+
+# SETTINGS_ENC_KEY must be IDENTICAL in the API and worker (the worker decrypts
+# the Telegram token the API encrypted). Keeping it in a shared group means you
+# enter it once. Generate it with:  openssl rand -hex 32
+envVarGroups:
+  - name: pricepulse-shared
+    envVars:
+      - key: SETTINGS_ENC_KEY
+        sync: false # you paste the value in the dashboard; never committed
+
+services:
+  # ── API + dashboard (public web service) ──
+  - type: web
+    name: pricepulse-api
+    runtime: docker
+    plan: starter
+    region: singapore
+    dockerfilePath: ./deploy/Dockerfile.render
+    dockerContext: .
+    dockerCommand: node apps/api/dist/main.js
+    healthCheckPath: /api/health
+    # Runs once per deploy, before traffic is routed: apply migrations, then
+    # seed/keep the single user + default settings (idempotent upsert).
+    preDeployCommand: pnpm --filter @pricepulse/db migrate:deploy && pnpm --filter @pricepulse/db seed:prod
+    envVars:
+      - fromGroup: pricepulse-shared
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: pricepulse-db
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true # Render generates a long random value (≥32 chars)
+      - key: SEED_USER_EMAIL
+        sync: false # your login email
+      - key: SEED_USER_PASSWORD
+        sync: false # your login password (delivered out-of-band)
+      # PORT is injected by Render automatically; the API reads it.
+
+  # ── Monitoring worker (background, always-on) ──
+  - type: worker
+    name: pricepulse-worker
+    runtime: docker
+    plan: starter # background workers require a paid instance (no free tier)
+    region: singapore
+    dockerfilePath: ./deploy/Dockerfile.render
+    dockerContext: .
+    dockerCommand: node apps/worker/dist/main.js
+    envVars:
+      - fromGroup: pricepulse-shared
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: pricepulse-db
+          property: connectionString
+      - key: WORKER_HEARTBEAT_SECONDS
+        value: '30'
+      - key: SCHEDULER_TICK_SECONDS
+        value: '20'

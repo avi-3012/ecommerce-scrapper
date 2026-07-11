@@ -1,0 +1,300 @@
+// PricePulse — complete Phase 1 schema (implementation plan §3).
+// Created in Phase 0 so no milestone performs destructive restructuring.
+//
+// Migration discipline (ADR-0002): migrations are authored via
+// `prisma migrate diff` and hand-edited where needed (price_history
+// partitioning), then applied with `prisma migrate deploy` only.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ── Enumerations (must mirror @pricepulse/shared; parity is unit-tested) ──
+
+enum Marketplace {
+  amazon_in
+  flipkart
+
+  @@map("marketplace")
+}
+
+enum ProductStatus {
+  active
+  paused_user
+  paused_auto
+
+  @@map("product_status")
+}
+
+enum StockStatus {
+  in_stock
+  out_of_stock
+  unknown
+
+  @@map("stock_status")
+}
+
+enum AlertType {
+  target_price
+  threshold_drop
+  price_change
+  offer_change
+  back_in_stock
+  auto_paused
+  system_health
+
+  @@map("alert_type")
+}
+
+enum DeliveryStatus {
+  pending
+  delivered
+  failed
+  held_quiet_hours
+  suppressed
+
+  @@map("delivery_status")
+}
+
+enum FailureReason {
+  fetch_blocked
+  fetch_timeout
+  http_error
+  parse_failed
+  listing_removed
+  captcha
+  other
+
+  @@map("failure_reason")
+}
+
+enum ExtractionTier {
+  http
+  browser
+
+  @@map("extraction_tier")
+}
+
+enum PriorityTier {
+  normal
+  high
+
+  @@map("priority_tier")
+}
+
+enum DigestFrequency {
+  off
+  daily
+  weekly
+
+  @@map("digest_frequency")
+}
+
+// ── Users (§3.1) — single seeded account in Phase 1; multi-user-shaped ──
+
+model User {
+  id             String   @id @default(uuid()) @db.Uuid
+  email          String   @unique
+  passwordHash   String   @map("password_hash")
+  telegramChatId String?  @map("telegram_chat_id")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  products      Product[]
+  alerts        Alert[]
+  settings      Settings?
+  importBatches ImportBatch[]
+
+  @@map("users")
+}
+
+// ── Tracked products (§3.2) ──
+
+model Product {
+  id                   String        @id @default(uuid()) @db.Uuid
+  userId               String        @map("user_id") @db.Uuid
+  marketplace          Marketplace
+  url                  String
+  canonicalUrl         String        @map("canonical_url")
+  marketplaceProductId String        @map("marketplace_product_id")
+  displayName          String        @map("display_name")
+  imageUrl             String?       @map("image_url")
+  tags                 String[]      @default([])
+  notes                String        @default("")
+  targetPrice          Decimal?      @map("target_price") @db.Decimal(12, 2)
+  dropThresholdPct     Decimal?      @map("drop_threshold_pct") @db.Decimal(5, 2)
+  status               ProductStatus @default(active)
+  consecutiveFailures  Int           @default(0) @map("consecutive_failures")
+  linkedProductId      String?       @unique @map("linked_product_id") @db.Uuid
+
+  // Current-state snapshot, denormalised for the catalogue view (FR-5.2)
+  currentPrice       Decimal?    @map("current_price") @db.Decimal(12, 2)
+  currentMrp         Decimal?    @map("current_mrp") @db.Decimal(12, 2)
+  currentDiscountPct Decimal?    @map("current_discount_pct") @db.Decimal(5, 2)
+  currentOffers      Json        @default("[]") @map("current_offers")
+  currentStockStatus StockStatus @default(unknown) @map("current_stock_status")
+
+  // Crossing-state latch for FR-3.1
+  targetCrossed Boolean @default(false) @map("target_crossed")
+
+  // Deal-quality context (FR-5.5), maintained incrementally on each successful check
+  allTimeLow  Decimal? @map("all_time_low") @db.Decimal(12, 2)
+  allTimeHigh Decimal? @map("all_time_high") @db.Decimal(12, 2)
+
+  lastCheckedAt DateTime?    @map("last_checked_at") @db.Timestamptz(6)
+  lastSuccessAt DateTime?    @map("last_success_at") @db.Timestamptz(6)
+  lastChangedAt DateTime?    @map("last_changed_at") @db.Timestamptz(6)
+  nextCheckAt   DateTime?    @map("next_check_at") @db.Timestamptz(6)
+  priorityTier  PriorityTier @default(normal) @map("priority_tier")
+
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  linkedProduct Product?       @relation("LinkedPair", fields: [linkedProductId], references: [id])
+  linkedBy      Product?       @relation("LinkedPair")
+  history       PriceHistory[]
+  alerts        Alert[]
+
+  // Duplicate prevention (FR-1.5) on the canonical URL, per user
+  @@unique([userId, canonicalUrl])
+  // Scheduler queue (WP-1.5)
+  @@index([status, nextCheckAt])
+  @@map("products")
+}
+
+// ── Price history (§3.3) — one row per check, partitioned monthly by checked_at.
+// The table is created as a PARTITIONED table by hand-written migration SQL;
+// Prisma reads/writes only through the parent table.
+
+model PriceHistory {
+  id             BigInt          @default(autoincrement())
+  productId      String          @map("product_id") @db.Uuid
+  checkedAt      DateTime        @map("checked_at") @db.Timestamptz(6)
+  success        Boolean
+  price          Decimal?        @db.Decimal(12, 2)
+  mrp            Decimal?        @db.Decimal(12, 2)
+  discountPct    Decimal?        @map("discount_pct") @db.Decimal(5, 2)
+  offers         Json            @default("[]")
+  offersHash     String?         @map("offers_hash")
+  stockStatus    StockStatus     @default(unknown) @map("stock_status")
+  failureReason  FailureReason?  @map("failure_reason")
+  failureDetail  String?         @map("failure_detail")
+  extractionTier ExtractionTier? @map("extraction_tier")
+  durationMs     Int?            @map("duration_ms")
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  // Partitioned tables require the partition key in the primary key
+  @@id([id, checkedAt])
+  @@index([productId, checkedAt])
+  @@map("price_history")
+}
+
+// ── Alerts (§3.4) ──
+
+model Alert {
+  id               String         @id @default(uuid()) @db.Uuid
+  productId        String?        @map("product_id") @db.Uuid
+  userId           String         @map("user_id") @db.Uuid
+  type             AlertType
+  oldValue         Json?          @map("old_value")
+  newValue         Json?          @map("new_value")
+  changePct        Decimal?       @map("change_pct") @db.Decimal(7, 2)
+  firedAt          DateTime       @default(now()) @map("fired_at") @db.Timestamptz(6)
+  channel          String         @default("telegram")
+  deliveryStatus   DeliveryStatus @default(pending) @map("delivery_status")
+  deliveryError    String?        @map("delivery_error")
+  deliveredAt      DateTime?      @map("delivered_at") @db.Timestamptz(6)
+  // Milestone 3 alert hygiene: set when delivery was withheld (e.g. cooldown)
+  suppressedReason String?        @map("suppressed_reason")
+
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  product Product? @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([userId, firedAt])
+  @@index([productId, firedAt])
+  @@index([deliveryStatus])
+  @@map("alerts")
+}
+
+// ── Settings (§3.5) — one row per user; typed columns for every FR-6.1
+// configurable plus the Milestone 3 hygiene block, so no later migration.
+
+model Settings {
+  userId String @id @map("user_id") @db.Uuid
+
+  checkIntervalMinutes    Int     @default(30) @map("check_interval_minutes")
+  globalDropThresholdPct  Decimal @default(5) @map("global_drop_threshold_pct") @db.Decimal(5, 2)
+  consecutiveFailureLimit Int     @default(5) @map("consecutive_failure_limit")
+  monitoringPaused        Boolean @default(false) @map("monitoring_paused")
+
+  alertTargetPrice   Boolean @default(true) @map("alert_target_price")
+  alertThresholdDrop Boolean @default(true) @map("alert_threshold_drop")
+  alertAnyChange     Boolean @default(false) @map("alert_any_change")
+  alertOfferChange   Boolean @default(true) @map("alert_offer_change")
+  alertBackInStock   Boolean @default(true) @map("alert_back_in_stock")
+
+  // Milestone 3 hygiene (schema-ready now)
+  cooldownMinutes         Int             @default(0) @map("cooldown_minutes")
+  quietHoursStart         String?         @map("quiet_hours_start")
+  quietHoursEnd           String?         @map("quiet_hours_end")
+  quietHoursHoldHealth    Boolean         @default(false) @map("quiet_hours_hold_health")
+  digestFrequency         DigestFrequency @default(off) @map("digest_frequency")
+  digestTime              String?         @map("digest_time")
+  nearLowThresholdPct     Decimal         @default(2) @map("near_low_threshold_pct") @db.Decimal(5, 2)
+
+  timezone String @default("Asia/Kolkata")
+
+  // Encrypted at rest (AES-256-GCM, key from environment — plan §8.4)
+  telegramBotTokenEnc String? @map("telegram_bot_token_enc")
+
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("settings")
+}
+
+// ── Import batches (§3.8) — the persisted FR-1.7 report ──
+
+model ImportBatch {
+  id         String   @id @default(uuid()) @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  filename   String
+  totalRows  Int      @map("total_rows")
+  imported   Int      @default(0)
+  duplicates Int      @default(0)
+  invalid    Int      @default(0)
+  rowErrors  Json     @default("[]") @map("row_errors")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("import_batches")
+}
+
+// ── System status (§3.7) — single-row health snapshot (NFR-2, UC-9) ──
+
+model SystemStatus {
+  id                 Int       @id @default(1)
+  workerHeartbeatAt  DateTime? @map("worker_heartbeat_at") @db.Timestamptz(6)
+  lastCycleStartedAt DateTime? @map("last_cycle_started_at") @db.Timestamptz(6)
+  lastCycleEndedAt   DateTime? @map("last_cycle_ended_at") @db.Timestamptz(6)
+  lastCycleDue       Int       @default(0) @map("last_cycle_due")
+  lastCycleChecked   Int       @default(0) @map("last_cycle_checked")
+  lastCycleSucceeded Int       @default(0) @map("last_cycle_succeeded")
+  lastCycleFailed    Int       @default(0) @map("last_cycle_failed")
+  successRate7d      Decimal?  @map("success_rate_7d") @db.Decimal(5, 2)
+  scraperHealth      Json      @default("{}") @map("scraper_health")
+  lastDigestAt       DateTime? @map("last_digest_at") @db.Timestamptz(6)
+  updatedAt          DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("system_status")
+}

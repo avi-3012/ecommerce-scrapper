@@ -1,0 +1,63 @@
+# Staging topology on the VPS (WP-0.3) — identical in shape to production
+# (a second compose project with its own hostname, database, and secrets).
+# Secrets come from deploy/.env.staging on the VPS (never committed).
+name: pricepulse-staging
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      SITE_HOSTNAME: ${SITE_HOSTNAME}
+    depends_on:
+      - api
+
+  api:
+    image: ${REGISTRY}/pricepulse-api:${TAG}
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: ${DATABASE_URL}
+      JWT_SECRET: ${JWT_SECRET}
+      SETTINGS_ENC_KEY: ${SETTINGS_ENC_KEY}
+    depends_on:
+      db:
+        condition: service_healthy
+
+  worker:
+    image: ${REGISTRY}/pricepulse-worker:${TAG}
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: ${DATABASE_URL}
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}']
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:

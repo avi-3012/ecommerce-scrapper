@@ -1,0 +1,34 @@
+# PricePulse image for Render (Docker runtime).
+#
+# One image serves both services — the API and the worker differ only by the
+# command Render runs (see render.yaml `dockerCommand`). Built on the official
+# Playwright image so Chromium + all its system libraries are present, which
+# is what makes the tier-2 browser fallback (Flipkart / anti-bot pages) work.
+#
+# The image tag MUST match the `playwright` npm version in packages/adapters
+# (currently 1.61.1) so the browser build and the driver agree.
+FROM mcr.microsoft.com/playwright:v1.61.1-jammy
+
+WORKDIR /repo
+
+# Browsers already live in the base image (PLAYWRIGHT_BROWSERS_PATH is preset);
+# don't let `pnpm install` re-download them.
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+ENV NODE_ENV=production
+ENV CI=true
+
+# pnpm via corepack, pinned to the repo's packageManager version.
+RUN corepack enable
+
+# The db package's postinstall runs `prisma generate`, which needs the schema,
+# so the whole source tree is copied before installing.
+COPY . .
+
+RUN pnpm install --frozen-lockfile
+
+# Build every package in dependency order (shared → adapters → core → db →
+# api/worker/web). This also produces apps/web/dist, which the API serves.
+RUN pnpm build
+
+# Default command is the API; render.yaml overrides it for the worker.
+CMD ["node", "apps/api/dist/main.js"]
