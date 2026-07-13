@@ -9,6 +9,13 @@ dist/
 .env
 .env.*
 !.env.example
+!*.example
+
+# SSH / cloud private keys — NEVER commit
+*.pem
+*.key
+*.p12
+*.pfx
 
 # logs & OS noise
 *.log

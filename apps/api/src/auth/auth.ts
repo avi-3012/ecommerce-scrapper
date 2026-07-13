@@ -95,7 +95,7 @@ export class AuthService {
     res.cookie(SESSION_COOKIE, token, {
       httpOnly: true,
       sameSite: 'lax',
-      secure: process.env.NODE_ENV === 'production',
+      secure: cookieSecure(),
       maxAge: SESSION_TTL_SECONDS * 1000,
       path: '/',
     });
@@ -104,6 +104,16 @@ export class AuthService {
   clearSessionCookie(res: Response): void {
     res.clearCookie(SESSION_COOKIE, { path: '/' });
   }
+}
+
+/**
+ * Whether the session cookie carries the Secure flag. Defaults to on in
+ * production (HTTPS), but can be forced off with COOKIE_SECURE=false for a
+ * plain-HTTP demo on a bare IP (no domain/TLS) so login still works.
+ */
+function cookieSecure(): boolean {
+  if (process.env.COOKIE_SECURE !== undefined) return process.env.COOKIE_SECURE === 'true';
+  return process.env.NODE_ENV === 'production';
 }
 
 /** Global guard: every route requires a session unless marked @Public (FR-6.4). */

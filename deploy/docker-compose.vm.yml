@@ -1,0 +1,69 @@
+# PricePulse — single-VM deploy (Azure/any Linux host) for a demo/MVP.
+#
+# Builds one image from deploy/Dockerfile.render (Playwright base, so the
+# browser tier works) and runs db + a one-shot migrate/seed + api + worker.
+# The API is published on host port 80 and serves the dashboard SPA too.
+#
+# Run from the repo root:
+#   docker compose --env-file deploy/.env.vm -f deploy/docker-compose.vm.yml up -d --build
+#
+# HTTP-only demo on a bare IP: set COOKIE_SECURE=false in .env.vm so login
+# works without HTTPS. Put a domain + TLS in front before real/production use.
+
+name: pricepulse
+
+x-app: &app
+  build:
+    context: ..
+    dockerfile: deploy/Dockerfile.render
+  image: pricepulse-app:local
+  env_file: .env.vm
+  restart: unless-stopped
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}']
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  # One-shot: apply migrations + seed the single user, then exit.
+  migrate:
+    <<: *app
+    restart: 'no'
+    command: sh -c "pnpm --filter @pricepulse/db migrate:deploy && pnpm --filter @pricepulse/db seed:prod"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  api:
+    <<: *app
+    command: node apps/api/dist/main.js
+    ports:
+      - '80:3000'
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  worker:
+    <<: *app
+    command: node apps/worker/dist/main.js
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  pgdata:
