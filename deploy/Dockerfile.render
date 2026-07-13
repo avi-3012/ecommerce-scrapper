@@ -14,8 +14,12 @@ WORKDIR /repo
 # Browsers already live in the base image (PLAYWRIGHT_BROWSERS_PATH is preset);
 # don't let `pnpm install` re-download them.
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
-ENV NODE_ENV=production
 ENV CI=true
+# NOTE: NODE_ENV is intentionally NOT set to "production" during the build —
+# that would make `pnpm install` skip devDependencies (typescript, prisma,
+# vite, tsx), breaking `prisma generate` and `pnpm build`. The running
+# containers get NODE_ENV=production from their runtime env (compose env_file
+# / render.yaml), which is what matters.
 
 # pnpm via corepack, pinned to the repo's packageManager version.
 RUN corepack enable
@@ -30,5 +34,5 @@ RUN pnpm install --frozen-lockfile
 # api/worker/web). This also produces apps/web/dist, which the API serves.
 RUN pnpm build
 
-# Default command is the API; render.yaml overrides it for the worker.
+# Default command is the API; compose/render override it for the worker.
 CMD ["node", "apps/api/dist/main.js"]
