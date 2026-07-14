@@ -162,8 +162,8 @@ export interface PreviewSnapshot {
   marketplace: Marketplace;
   marketplaceProductId: string;
   name: string;
-  price: number;
-  mrp: number;
+  price: number | null;
+  mrp: number | null;
   discountPct: number;
   offers: Offer[];
   stockStatus: StockStatus;

@@ -61,25 +61,34 @@ export function parseAmazonPage(html: string, expectedAsin?: string): ProductSna
     price = parseInrAmount($('#priceblock_ourprice, #priceblock_dealprice').first().text());
     if (price !== null) provenance.price = 'legacy-price-id';
   }
-  if (price === null) {
-    price = parseInrAmount($('.a-price:not(.a-text-price) .a-offscreen').first().text());
-    if (price !== null) provenance.price = 'any-offscreen-price';
-  }
+  // Deliberately NO page-wide `.a-price` fallback: on an out-of-stock or
+  // unavailable listing the buy-box price is gone, and the first price on the
+  // page is usually an accessory, an EMI (“₹499/month”), or an add-on — which
+  // is exactly how out-of-stock items ended up with garbage prices.
 
-  // A parsed price with no availability signal means a normal buyable listing.
+  // A parsed buy-box price with no availability signal means a normal listing.
   if (stockStatus === 'unknown' && price !== null) {
     stockStatus = 'in_stock';
     provenance.stock = 'implied-by-price';
   }
 
-  // ── MRP (strikethrough list price) ──
-  let mrp = parseInrAmount(
-    $('.basisPrice .a-offscreen, .a-price.a-text-price .a-offscreen').first().text(),
-  );
-  if (mrp !== null) provenance.mrp = 'basis-price';
-  if (mrp === null && price !== null) {
-    mrp = price;
-    provenance.mrp = 'equal-to-price';
+  // No trustworthy current price when not in stock — record null, not a guess.
+  if (stockStatus !== 'in_stock') {
+    price = null;
+    delete provenance.price;
+  }
+
+  // ── MRP (strikethrough list price) — only meaningful alongside a live price ──
+  let mrp: number | null = null;
+  if (price !== null) {
+    mrp = parseInrAmount(
+      $('.basisPrice .a-offscreen, .a-price.a-text-price .a-offscreen').first().text(),
+    );
+    if (mrp !== null) provenance.mrp = 'basis-price';
+    if (mrp === null) {
+      mrp = price;
+      provenance.mrp = 'equal-to-price';
+    }
   }
 
   // ── Offers (coupon badge, bank/promo strips) ──
@@ -108,9 +117,9 @@ export function parseAmazonPage(html: string, expectedAsin?: string): ProductSna
     marketplace: 'amazon_in',
     marketplaceProductId: pageAsin ?? expectedAsin ?? '',
     name,
-    price: price ?? 0,
-    mrp: mrp ?? price ?? 0,
-    discountPct: computeDiscountPct(price ?? 0, mrp ?? price ?? 0),
+    price,
+    mrp,
+    discountPct: computeDiscountPct(price, mrp),
     offers,
     stockStatus,
     imageUrl,

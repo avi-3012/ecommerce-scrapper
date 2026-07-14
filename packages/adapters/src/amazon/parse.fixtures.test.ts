@@ -34,10 +34,27 @@ describe('amazon fixture suite (WP-1.2)', () => {
     expect(types).toContain('bank_offer');
   });
 
-  it('fixture: out-of-stock is a successful check with stock status (FR-2.7)', () => {
+  it('fixture: out-of-stock is a successful check with NULL price (no garbage price)', () => {
     const snap = parseAmazonPage(fixture('out-of-stock'), 'B09XS7JWHH');
     expect(snap.stockStatus).toBe('out_of_stock');
     expect(snap.name).toContain('Sony WH-1000XM5');
+    // Out of stock ⇒ no trustworthy buy-box price; must be null, never a scraped number.
+    expect(snap.price).toBeNull();
+    expect(snap.mrp).toBeNull();
+  });
+
+  it('does not grab an accessory/EMI price on an out-of-stock page', () => {
+    // Unavailable listing whose only prices on the page are unrelated (an
+    // add-on and an EMI). The old page-wide fallback grabbed ₹499; must not now.
+    const html = `<!doctype html><html><body>
+      <span id="productTitle">Some Laptop</span>
+      <div id="availability"><span>Currently unavailable.</span></div>
+      <div id="protectionPlan"><span class="a-price"><span class="a-offscreen">₹499</span></span></div>
+      <div id="emiOptions"><span class="a-price"><span class="a-offscreen">₹4,999</span></span></div>
+    </body></html>`;
+    const snap = parseAmazonPage(html);
+    expect(snap.stockStatus).toBe('out_of_stock');
+    expect(snap.price).toBeNull();
   });
 
   it('fixture: CAPTCHA page fails as captcha', () => {

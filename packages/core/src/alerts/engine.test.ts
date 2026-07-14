@@ -20,7 +20,7 @@ function snap(price: number, overrides: Partial<ProductSnapshot> = {}): ProductS
   };
 }
 
-function prev(price: number, overrides: Partial<PreviousState> = {}): PreviousState {
+function prev(price: number | null, overrides: Partial<PreviousState> = {}): PreviousState {
   const offers = overrides.offers ?? [];
   return {
     price,
@@ -229,6 +229,37 @@ describe('back in stock (FR-3.5)', () => {
 
   it('first-ever check in stock is silent', () => {
     expect(types(evaluateAlerts(null, snap(1000), rules(), allOn))).toHaveLength(0);
+  });
+});
+
+describe('null price (out of stock)', () => {
+  it('fires no price-based alerts when the current price is null', () => {
+    const oos = snap(0, { price: null, stockStatus: 'out_of_stock' });
+    const r = evaluateAlerts(prev(1000), oos, rules({ targetPrice: 5000 }), allOn);
+    expect(types(r)).not.toContain('target_price');
+    expect(types(r)).not.toContain('threshold_drop');
+    expect(types(r)).not.toContain('price_change');
+  });
+
+  it('still fires back_in_stock when a null-price OOS product returns in stock', () => {
+    const r = evaluateAlerts(
+      prev(null, { stockStatus: 'out_of_stock' }),
+      snap(999),
+      rules(),
+      allOn,
+    );
+    expect(types(r)).toContain('back_in_stock');
+  });
+
+  it('does not fire a threshold drop against a null previous price', () => {
+    const r = evaluateAlerts(
+      prev(null, { stockStatus: 'out_of_stock' }),
+      snap(500),
+      rules(),
+      allOn,
+    );
+    expect(types(r)).not.toContain('threshold_drop');
+    expect(types(r)).not.toContain('price_change');
   });
 });
 

@@ -16,10 +16,15 @@ export interface ProductSnapshot {
   marketplace: Marketplace;
   marketplaceProductId: string;
   name: string;
-  /** Selling price in rupees. */
-  price: number;
-  /** Listed MRP in rupees; may equal price when no strikethrough is shown. */
-  mrp: number;
+  /**
+   * Selling price in rupees, or null when there is no trustworthy current
+   * price — chiefly out-of-stock listings, where the marketplace hides the
+   * buy-box price and any number on the page (accessory, EMI, add-on) would be
+   * wrong. Never record a guessed price; null means "unknown".
+   */
+  price: number | null;
+  /** Listed MRP in rupees, or null when unknown. May equal price. */
+  mrp: number | null;
   /** Derived: (mrp - price) / mrp, as a percentage rounded to 2 decimals. */
   discountPct: number;
   offers: Offer[];
@@ -28,7 +33,7 @@ export interface ProductSnapshot {
   provenance: Record<string, string>;
 }
 
-export function computeDiscountPct(price: number, mrp: number): number {
-  if (mrp <= 0 || price >= mrp) return 0;
+export function computeDiscountPct(price: number | null, mrp: number | null): number {
+  if (price === null || mrp === null || mrp <= 0 || price >= mrp) return 0;
   return Math.round(((mrp - price) / mrp) * 10000) / 100;
 }

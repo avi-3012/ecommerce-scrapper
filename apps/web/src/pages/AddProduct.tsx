@@ -84,7 +84,7 @@ export function AddProductPage(): JSX.Element {
   });
 
   const s = preview?.snapshot;
-  const targetAboveCurrent = s && targetPrice && Number(targetPrice) >= s.price;
+  const targetAboveCurrent = s && s.price !== null && targetPrice && Number(targetPrice) >= s.price;
 
   return (
     <div className="mx-auto max-w-2xl space-y-4">
@@ -125,8 +125,8 @@ export function AddProductPage(): JSX.Element {
                 <StockBadge stock={s.stockStatus} />
               </div>
               <p className="nums mt-2 text-lg font-semibold text-fg">
-                {inr(s.price)}{' '}
-                {s.mrp > s.price && (
+                {s.price === null ? 'Price unavailable (out of stock)' : inr(s.price)}{' '}
+                {s.mrp !== null && s.price !== null && s.mrp > s.price && (
                   <span className="text-sm font-normal text-fg-subtle">
                     <s>{inr(s.mrp)}</s> · {s.discountPct}% off
                   </span>

@@ -354,8 +354,12 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
         const keyboard = new InlineKeyboard()
           .text('✅ Track it', `add:confirm:${id}`)
           .text('❌ Cancel', `add:cancel:${id}`);
+        const priceLine =
+          s.price === null
+            ? 'Price: <b>unavailable (out of stock)</b>'
+            : `Price: <b>${formatInr(s.price)}</b>${s.mrp !== null && s.mrp > s.price ? ` (MRP ${formatInr(s.mrp)}, ${s.discountPct}% off)` : ''}`;
         await ctx.reply(
-          `<b>${escapeHtml(s.name)}</b>\n${MARKETPLACE_LABELS[s.marketplace]} · ${s.stockStatus === 'in_stock' ? 'In stock' : 'Out of stock'}\nPrice: <b>${formatInr(s.price)}</b>${s.mrp > s.price ? ` (MRP ${formatInr(s.mrp)}, ${s.discountPct}% off)` : ''}${offers}\n\nIs this the right product?`,
+          `<b>${escapeHtml(s.name)}</b>\n${MARKETPLACE_LABELS[s.marketplace]} · ${s.stockStatus === 'in_stock' ? 'In stock' : 'Out of stock'}\n${priceLine}${offers}\n\nIs this the right product?`,
           { parse_mode: 'HTML', reply_markup: keyboard },
         );
       }

@@ -10,7 +10,8 @@ import { diffOffers, offersHash } from '@pricepulse/adapters';
 
 /** The product's state as of its last SUCCESSFUL check (null = never succeeded). */
 export interface PreviousState {
-  price: number;
+  /** Last known price, or null if the last successful check had no price (out of stock). */
+  price: number | null;
   offers: Offer[];
   offersHash: string;
   stockStatus: StockStatus;
@@ -56,8 +57,12 @@ export function evaluateAlerts(
   const price = snapshot.price;
   let targetCrossed = rules.targetCrossed;
 
+  // No trustworthy current price (out of stock / unknown) ⇒ no price-based
+  // alerts this check. Offer-change and back-in-stock still evaluate below.
+  // (Each price rule checks `price !== null` inline so the type narrows.)
+
   // ── Target price (FR-3.1) — crossing semantics with latch ──
-  if (rules.targetPrice !== null && snapshot.stockStatus !== 'out_of_stock') {
+  if (price !== null && rules.targetPrice !== null && snapshot.stockStatus !== 'out_of_stock') {
     const atOrBelow = price <= rules.targetPrice;
     if (atOrBelow && !rules.targetCrossed) {
       // Fires on the transition, including a first-ever check at/below target
@@ -67,7 +72,8 @@ export function evaluateAlerts(
           type: 'target_price',
           oldValue: { price: previous?.price ?? null, target: rules.targetPrice },
           newValue: { price, target: rules.targetPrice },
-          changePct: previous ? signedChangePct(previous.price, price) : null,
+          changePct:
+            previous && previous.price !== null ? signedChangePct(previous.price, price) : null,
         });
       }
       targetCrossed = true;
@@ -81,7 +87,7 @@ export function evaluateAlerts(
   let firedSpecificPriceAlert = events.length > 0;
 
   // ── Threshold drop (FR-3.2) — against the last successful check ──
-  if (previous && toggles.alertThresholdDrop) {
+  if (price !== null && previous && previous.price !== null && toggles.alertThresholdDrop) {
     const threshold = rules.dropThresholdPct ?? toggles.globalDropThresholdPct;
     if (threshold > 0 && previous.price > 0) {
       const dropPct = ((previous.price - price) / previous.price) * 100;
@@ -98,7 +104,14 @@ export function evaluateAlerts(
   }
 
   // ── Any-change (FR-3.3) — suppressed when a more specific price alert fired ──
-  if (previous && toggles.alertAnyChange && price !== previous.price && !firedSpecificPriceAlert) {
+  if (
+    price !== null &&
+    previous &&
+    previous.price !== null &&
+    toggles.alertAnyChange &&
+    price !== previous.price &&
+    !firedSpecificPriceAlert
+  ) {
     events.push({
       type: 'price_change',
       oldValue: { price: previous.price },

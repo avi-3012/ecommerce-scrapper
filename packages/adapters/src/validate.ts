@@ -11,14 +11,19 @@ export function validateSnapshot(snapshot: ProductSnapshot): ProductSnapshot {
     throw new CheckError('parse_failed', 'Snapshot has an empty product name');
   }
   if (snapshot.stockStatus === 'in_stock') {
-    if (!Number.isFinite(snapshot.price) || snapshot.price <= 0) {
+    if (snapshot.price === null || !Number.isFinite(snapshot.price) || snapshot.price <= 0) {
       throw new CheckError(
         'parse_failed',
         `In-stock listing parsed with invalid price ${snapshot.price}`,
       );
     }
   }
-  if (Number.isFinite(snapshot.mrp) && snapshot.mrp > 0 && snapshot.price > snapshot.mrp * 1.005) {
+  if (
+    snapshot.price !== null &&
+    snapshot.mrp !== null &&
+    snapshot.mrp > 0 &&
+    snapshot.price > snapshot.mrp * 1.005
+  ) {
     throw new CheckError(
       'parse_failed',
       `Selling price ${snapshot.price} exceeds MRP ${snapshot.mrp} beyond tolerance`,

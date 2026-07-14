@@ -106,23 +106,26 @@ export async function recordCheck(
     },
   );
 
-  const priceChanged = previous === null || previous.price !== snapshot.price;
+  // A "live" price is one we trust: present and in stock. Out-of-stock/unknown
+  // checks carry null — we still record the check, but must NOT overwrite the
+  // product's last known price with null (that would erase useful data and
+  // break drop detection when it comes back in stock).
+  const hasLivePrice =
+    snapshot.price !== null && snapshot.price > 0 && snapshot.stockStatus !== 'out_of_stock';
+  const priceChanged = hasLivePrice && (previous === null || previous.price !== snapshot.price);
   const currentOffers = JSON.parse(JSON.stringify(snapshot.offers)) as object;
 
-  // Deal-quality context (FR-5.5): all-time low/high maintained incrementally.
+  // Deal-quality context (FR-5.5): all-time low/high maintained incrementally
+  // from live prices only.
   const existingLow = product.allTimeLow === null ? null : Number(product.allTimeLow);
   const existingHigh = product.allTimeHigh === null ? null : Number(product.allTimeHigh);
-  const trackExtremes = snapshot.stockStatus !== 'out_of_stock' && snapshot.price > 0;
-  const allTimeLow = trackExtremes
-    ? existingLow === null
-      ? snapshot.price
-      : Math.min(existingLow, snapshot.price)
-    : existingLow;
-  const allTimeHigh = trackExtremes
-    ? existingHigh === null
-      ? snapshot.price
-      : Math.max(existingHigh, snapshot.price)
-    : existingHigh;
+  let allTimeLow = existingLow;
+  let allTimeHigh = existingHigh;
+  if (snapshot.price !== null && hasLivePrice) {
+    const p = snapshot.price;
+    allTimeLow = existingLow === null ? p : Math.min(existingLow, p);
+    allTimeHigh = existingHigh === null ? p : Math.max(existingHigh, p);
+  }
 
   const results = await prisma.$transaction([
     prisma.priceHistory.create({
@@ -145,9 +148,15 @@ export async function recordCheck(
       data: {
         displayName: product.displayName || snapshot.name,
         imageUrl: product.imageUrl ?? snapshot.imageUrl,
-        currentPrice: snapshot.price,
-        currentMrp: snapshot.mrp,
-        currentDiscountPct: snapshot.discountPct,
+        // Preserve the last known price/MRP/discount when this check has no
+        // live price (out of stock); only the stock status changes.
+        ...(hasLivePrice
+          ? {
+              currentPrice: snapshot.price,
+              currentMrp: snapshot.mrp,
+              currentDiscountPct: snapshot.discountPct,
+            }
+          : {}),
         currentOffers,
         currentStockStatus: snapshot.stockStatus,
         allTimeLow,
@@ -181,10 +190,13 @@ export async function recordCheck(
 
 /** The product's last-successful-check state, reconstructed from its snapshot columns. */
 export function previousStateOf(product: Product): PreviousState | null {
-  if (!product.lastSuccessAt || product.currentPrice === null) return null;
+  // "No previous" means never successfully checked. A product that has only
+  // ever been out of stock still counts as previous (price null) so a later
+  // back-in-stock transition is detected.
+  if (!product.lastSuccessAt) return null;
   const offers = (product.currentOffers ?? []) as unknown as Offer[];
   return {
-    price: Number(product.currentPrice),
+    price: product.currentPrice === null ? null : Number(product.currentPrice),
     offers,
     offersHash: offersHash(offers),
     stockStatus: product.currentStockStatus,

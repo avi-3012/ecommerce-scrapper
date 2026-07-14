@@ -38,6 +38,12 @@ describe('flipkart fixture suite (WP-1.3)', () => {
     expect(snap.offers.map((o) => o.type)).toContain('coupon');
   });
 
+  it('nulls the price for a sold-out listing even if JSON-LD carries one', () => {
+    const snap = parseFlipkartPage(fixture('jsonld-coming-soon'), { pid: 'MOBH2QZFDGKXYZAB' });
+    expect(snap.stockStatus).toBe('out_of_stock');
+    expect(snap.price).toBeNull();
+  });
+
   it('fixture: Sold Out page is a successful out-of-stock check', () => {
     const snap = parseFlipkartPage(fixture('sold-out'), { pid: 'MOBG3ZXKWQPMNBVC' });
     expect(snap.stockStatus).toBe('out_of_stock');

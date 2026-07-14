@@ -116,17 +116,27 @@ export function parseFlipkartPage(html: string, expected?: FlipkartExpectedIds):
     provenance.stock = 'implied-by-price';
   }
 
-  // ── MRP: the struck-through amount ──
+  // No trustworthy current price when not in stock — record null, not a guess
+  // (Flipkart's JSON-LD still carries a price for sold-out items, but it isn't
+  // a buyable current price).
+  if (stockStatus !== 'in_stock') {
+    price = null;
+    delete provenance.price;
+  }
+
+  // ── MRP: the struck-through amount — only alongside a live price ──
   let mrp: number | null = null;
-  const struck = $('strike, del, s, [class*="strike"]')
-    .filter((_i, el) => /₹\s?[\d,]+/.test($(el).text()))
-    .first()
-    .text();
-  mrp = parseInrAmount(struck);
-  if (mrp !== null) provenance.mrp = 'strikethrough';
-  if (mrp === null && price !== null) {
-    mrp = price;
-    provenance.mrp = 'equal-to-price';
+  if (price !== null) {
+    const struck = $('strike, del, s, [class*="strike"]')
+      .filter((_i, el) => /₹\s?[\d,]+/.test($(el).text()))
+      .first()
+      .text();
+    mrp = parseInrAmount(struck);
+    if (mrp !== null) provenance.mrp = 'strikethrough';
+    if (mrp === null) {
+      mrp = price;
+      provenance.mrp = 'equal-to-price';
+    }
   }
 
   // ── Offers: list items mentioning offer keywords ──
@@ -150,9 +160,9 @@ export function parseFlipkartPage(html: string, expected?: FlipkartExpectedIds):
     marketplace: 'flipkart',
     marketplaceProductId: pageId ?? expected?.pid ?? expected?.itemId ?? '',
     name,
-    price: price ?? 0,
-    mrp: mrp ?? price ?? 0,
-    discountPct: computeDiscountPct(price ?? 0, mrp ?? price ?? 0),
+    price,
+    mrp,
+    discountPct: computeDiscountPct(price, mrp),
     offers,
     stockStatus,
     imageUrl,
