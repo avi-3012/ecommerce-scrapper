@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type { OnModuleInit } from '@nestjs/common';
-import { createBrowserFetch, createDefaultRegistry } from '@pricepulse/adapters';
+import { createBrowserFetch, createDefaultRegistry, proxyLabel } from '@pricepulse/adapters';
 import type { AdapterRegistry, FetchFn } from '@pricepulse/adapters';
 import { getUserWithSettings, performCheck, recordCheck } from '@pricepulse/core';
 import type { RecordedCheck } from '@pricepulse/core';
@@ -27,6 +27,8 @@ export class CheckRunnerService implements OnModuleInit {
         ? 'Browser tier (Playwright) available'
         : 'Browser tier not installed — tier-1 HTTP only (see HUMAN-TASKS H-13)',
     );
+    const proxy = proxyLabel();
+    console.log(proxy ? `Scraper proxy active: ${proxy}` : 'Scraper proxy: none (direct)');
   }
 
   async checkProduct(product: Product): Promise<RecordedCheck> {

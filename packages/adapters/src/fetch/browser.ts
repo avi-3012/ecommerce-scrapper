@@ -1,6 +1,8 @@
 import type { RawPage } from '../adapter.js';
 import type { FetchFn } from './http.js';
 import { CheckError } from '../errors.js';
+import { playwrightProxy } from './proxy.js';
+import type { PlaywrightProxy } from './proxy.js';
 
 const MAX_PAGES_PER_BROWSER = 50;
 
@@ -21,7 +23,7 @@ export async function createBrowserFetch(): Promise<FetchFn | undefined> {
   const specifier = 'playwright';
   let playwright: {
     chromium: {
-      launch(opts: { headless: boolean }): Promise<{
+      launch(opts: { headless: boolean; proxy?: PlaywrightProxy }): Promise<{
         newContext(opts?: object): Promise<{
           newPage(): Promise<{
             goto(url: string, opts: object): Promise<{ status(): number } | null>;
@@ -42,11 +44,13 @@ export async function createBrowserFetch(): Promise<FetchFn | undefined> {
 
   let browser: Awaited<ReturnType<typeof playwright.chromium.launch>> | null = null;
   let pagesServed = 0;
+  const proxy = playwrightProxy();
 
   const fetchFn: FetchFn = async (url): Promise<RawPage> => {
     if (!browser || pagesServed >= MAX_PAGES_PER_BROWSER) {
       await browser?.close().catch(() => undefined);
-      browser = await playwright.chromium.launch({ headless: true });
+      // Route the browser tier through the residential proxy when configured (R-2).
+      browser = await playwright.chromium.launch({ headless: true, proxy });
       pagesServed = 0;
     }
     const context = await browser.newContext({

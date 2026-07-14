@@ -1,6 +1,7 @@
 import { gotScraping } from 'got-scraping';
 import type { RawPage } from '../adapter.js';
 import { CheckError } from '../errors.js';
+import { scraperProxyUrl } from './proxy.js';
 
 export interface HttpFetchOptions {
   timeoutMs?: number;
@@ -16,12 +17,15 @@ export type FetchFn = (url: string, options?: HttpFetchOptions) => Promise<RawPa
  */
 export const httpFetch: FetchFn = async (url, options = {}) => {
   const timeoutMs = options.timeoutMs ?? 20_000;
+  const proxyUrl = scraperProxyUrl();
   let response;
   try {
     response = await gotScraping({
       url,
       timeout: { request: timeoutMs },
       throwHttpErrors: false,
+      // Route through the residential proxy when configured (R-2).
+      ...(proxyUrl ? { proxyUrl } : {}),
       headerGeneratorOptions: {
         devices: ['desktop'],
         locales: ['en-IN', 'en-US'],

@@ -51,6 +51,8 @@ services:
         sync: false # your login email
       - key: SEED_USER_PASSWORD
         sync: false # your login password (delivered out-of-band)
+      - key: SCRAPER_PROXY_URL
+        sync: false # residential proxy gateway URL (R-2); blank = direct
       # PORT is injected by Render automatically; the API reads it.
 
   # ── Monitoring worker (background, always-on) ──
@@ -74,3 +76,5 @@ services:
         value: '30'
       - key: SCHEDULER_TICK_SECONDS
         value: '20'
+      - key: SCRAPER_PROXY_URL
+        sync: false # residential proxy gateway URL (R-2); blank = direct

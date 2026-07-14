@@ -7,6 +7,7 @@ export * from './money.js';
 export * from './default-registry.js';
 export * from './fetch/http.js';
 export * from './fetch/browser.js';
+export * from './fetch/proxy.js';
 export { AmazonAdapter } from './amazon/adapter.js';
 export { FlipkartAdapter } from './flipkart/adapter.js';
 export { recognizeAmazon } from './amazon/canonicalize.js';

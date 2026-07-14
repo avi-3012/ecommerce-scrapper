@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import type { OnModuleDestroy } from '@nestjs/common';
-import { createBrowserFetch } from '@pricepulse/adapters';
+import { createBrowserFetch, proxyLabel } from '@pricepulse/adapters';
 import type { FetchFn } from '@pricepulse/adapters';
 
 /**
@@ -31,6 +31,8 @@ export class BrowserService implements OnModuleDestroy {
         ? 'API browser tier (Playwright) available for preview escalation'
         : 'API browser tier not installed — preview is tier-1 HTTP only (see HUMAN-TASKS H-13)',
     );
+    const proxy = proxyLabel();
+    console.log(proxy ? `API scraper proxy active: ${proxy}` : 'API scraper proxy: none (direct)');
   }
 
   onModuleDestroy(): void {
