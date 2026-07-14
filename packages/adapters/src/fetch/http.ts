@@ -64,3 +64,56 @@ export async function resolveFinalUrl(url: string, fetchFn: FetchFn = httpFetch)
   const page = await fetchFn(url);
   return page.url;
 }
+
+/**
+ * Follow HTTP redirects until the URL is a recognized product listing (per the
+ * caller's `isListing` predicate) or redirects stop. Turns short/affiliate
+ * links (fkrt.co, amzn.in, amzn.to, pwap.in, bilty.co, dl.flipkart.com, …) into
+ * real marketplace URLs for bulk import.
+ *
+ * It stops the moment the URL recognizes as a listing, so the heavy marketplace
+ * page is NEVER downloaded — fast, cheap on proxy bandwidth, and it sidesteps
+ * the marketplace anti-bot during resolution. Routes through the proxy when set.
+ * Returns the best-effort final URL (may not be a listing — the caller decides).
+ */
+export async function resolveListingUrl(
+  rawUrl: string,
+  isListing: (url: string) => boolean,
+  opts: { maxHops?: number; timeoutMs?: number } = {},
+): Promise<string> {
+  const maxHops = opts.maxHops ?? 6;
+  const timeoutMs = opts.timeoutMs ?? 12_000;
+  const proxyUrl = scraperProxyUrl();
+  let current = rawUrl;
+
+  for (let hop = 0; hop <= maxHops; hop++) {
+    if (isListing(current)) return current;
+    let response;
+    try {
+      response = await gotScraping({
+        url: current,
+        method: 'GET',
+        followRedirect: false,
+        throwHttpErrors: false,
+        timeout: { request: timeoutMs },
+        ...(proxyUrl ? { proxyUrl } : {}),
+        headerGeneratorOptions: { devices: ['desktop'], locales: ['en-IN', 'en-US'] },
+      });
+    } catch {
+      break; // network error while resolving — return best effort
+    }
+    const status = response.statusCode;
+    const raw = response.headers['location'];
+    const location = Array.isArray(raw) ? raw[0] : raw;
+    if (status >= 300 && status < 400 && location) {
+      try {
+        current = new URL(location, current).href; // absolutise relative redirects
+      } catch {
+        break;
+      }
+      continue;
+    }
+    break; // not a redirect (200/4xx/5xx) — stop
+  }
+  return current;
+}

@@ -1,10 +1,32 @@
 import { BadRequestException, Inject, Injectable } from '@nestjs/common';
 import { parse as parseCsv } from 'csv-parse/sync';
 import ExcelJS from 'exceljs';
-import { createDefaultRegistry } from '@pricepulse/adapters';
+import { createDefaultRegistry, resolveListingUrl } from '@pricepulse/adapters';
+import type { UrlRecognition } from '@pricepulse/adapters';
 import { getUserWithSettings } from '@pricepulse/core';
 import type { Marketplace } from '@pricepulse/shared';
 import { PrismaService } from '../prisma.service.js';
+
+/** How many short links to resolve in parallel during a bulk import (WP-2.9). */
+const RESOLVE_CONCURRENCY = 6;
+
+/** Run an async mapper over items with a bounded number of concurrent workers. */
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i]!);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
 
 export interface ImportRow {
   rowNumber: number;
@@ -75,12 +97,35 @@ export class ImportService {
     };
     const seenCanonical = new Set<string>();
 
-    for (const row of rows) {
-      if (!row.url) {
+    // Resolve short/affiliate links (fkrt.co, amzn.in, amzn.to, pwap.in, …) to
+    // real marketplace URLs before recognizing them (network step, parallel).
+    const isListing = (u: string): boolean => this.registry.recognize(u).kind === 'listing';
+    const resolved = await mapWithConcurrency(rows, RESOLVE_CONCURRENCY, async (row) => {
+      if (!row.url)
+        return { effectiveUrl: '', recognition: undefined as UrlRecognition | undefined };
+      let effectiveUrl = row.url;
+      let recognition = this.registry.recognize(row.url);
+      if (recognition.kind !== 'listing') {
+        try {
+          const final = await resolveListingUrl(row.url, isListing);
+          if (final && final !== row.url) {
+            effectiveUrl = final;
+            recognition = this.registry.recognize(final);
+          }
+        } catch {
+          // resolution failed (blocked/unreachable) — keep the original recognition
+        }
+      }
+      return { effectiveUrl, recognition };
+    });
+
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i]!;
+      const { recognition, effectiveUrl } = resolved[i]!;
+      if (!row.url || !recognition) {
         review.invalid.push({ rowNumber: row.rowNumber, url: '', reason: 'Missing URL' });
         continue;
       }
-      const recognition = this.registry.recognize(row.url);
       if (recognition.kind === 'unsupported') {
         review.invalid.push({
           rowNumber: row.rowNumber,
@@ -93,7 +138,8 @@ export class ImportService {
         review.invalid.push({
           rowNumber: row.rowNumber,
           url: row.url,
-          reason: 'Not a product listing page',
+          reason:
+            'Could not resolve to a product listing (short link may be blocked, expired, or point to a search/category page)',
         });
         continue;
       }
@@ -128,8 +174,10 @@ export class ImportService {
         continue;
       }
       seenCanonical.add(recognition.canonicalUrl);
+      // Store the resolved full URL so the product's "open listing" link is direct.
       review.valid.push({
         ...row,
+        url: effectiveUrl,
         canonicalUrl: recognition.canonicalUrl,
         marketplace: recognition.marketplace,
         marketplaceProductId: recognition.productId,
