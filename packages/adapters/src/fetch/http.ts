@@ -24,8 +24,10 @@ export const httpFetch: FetchFn = async (url, options = {}) => {
       url,
       timeout: { request: timeoutMs },
       throwHttpErrors: false,
-      // Route through the residential proxy when configured (R-2).
-      ...(proxyUrl ? { proxyUrl } : {}),
+      // Route through the residential proxy when configured (R-2). Most HTTP
+      // proxies can't tunnel HTTP/2, which surfaces as "Protocol error" — so
+      // force HTTP/1.1 whenever a proxy is in the path.
+      ...(proxyUrl ? { proxyUrl, http2: false } : {}),
       headerGeneratorOptions: {
         devices: ['desktop'],
         locales: ['en-IN', 'en-US'],
@@ -96,7 +98,8 @@ export async function resolveListingUrl(
         followRedirect: false,
         throwHttpErrors: false,
         timeout: { request: timeoutMs },
-        ...(proxyUrl ? { proxyUrl } : {}),
+        // HTTP/1.1 through proxies (HTTP/2-over-proxy → "Protocol error").
+        ...(proxyUrl ? { proxyUrl, http2: false } : {}),
         headerGeneratorOptions: { devices: ['desktop'], locales: ['en-IN', 'en-US'] },
       });
     } catch {
