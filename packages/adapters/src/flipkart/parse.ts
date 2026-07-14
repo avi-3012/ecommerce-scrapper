@@ -84,6 +84,21 @@ export function parseFlipkartPage(html: string, expected?: FlipkartExpectedIds):
     imageUrl = image ?? null;
   }
 
+  // ── Strategy 1b: Flipkart's embedded state JSON. Flipkart's DOM class names
+  // are obfuscated (e.g. "Nx9bqj") so CSS selectors are unreliable, but the
+  // page ships the price in a JSON blob — the most stable signal. ──
+  if (price === null) {
+    const match =
+      html.match(/"finalPrice"\s*:\s*"?(\d{2,9})/i) ||
+      html.match(/"sellingPrice"\s*:\s*\{[^}]*?"value"\s*:\s*"?(\d{2,9})/i) ||
+      html.match(/"sellingPrice"\s*:\s*"?(\d{2,9})/i) ||
+      html.match(/"price"\s*:\s*"?(\d{2,9})/i);
+    if (match) {
+      price = parseInrAmount(match[1]);
+      if (price !== null) provenance.price = 'embedded-json';
+    }
+  }
+
   // ── Strategy 2: selector/text fallbacks ──
   if (!name) {
     name =
@@ -124,7 +139,7 @@ export function parseFlipkartPage(html: string, expected?: FlipkartExpectedIds):
     delete provenance.price;
   }
 
-  // ── MRP: the struck-through amount — only alongside a live price ──
+  // ── MRP: struck-through DOM, else embedded JSON, else equal-to-price ──
   let mrp: number | null = null;
   if (price !== null) {
     const struck = $('strike, del, s, [class*="strike"]')
@@ -133,6 +148,14 @@ export function parseFlipkartPage(html: string, expected?: FlipkartExpectedIds):
       .text();
     mrp = parseInrAmount(struck);
     if (mrp !== null) provenance.mrp = 'strikethrough';
+    if (mrp === null) {
+      const jsonMrp = html.match(/"mrp"\s*:\s*"?(\d{2,9})/i);
+      const parsed = jsonMrp ? parseInrAmount(jsonMrp[1]) : null;
+      if (parsed !== null && parsed >= price) {
+        mrp = parsed;
+        provenance.mrp = 'embedded-json';
+      }
+    }
     if (mrp === null) {
       mrp = price;
       provenance.mrp = 'equal-to-price';
@@ -193,6 +216,17 @@ function extractJsonLdProduct($: cheerio.CheerioAPI): JsonLdProduct | null {
 }
 
 function detectInterstitials(html: string): void {
+  // A real product page carries JSON-LD Product or an embedded price blob and
+  // is large; block/CAPTCHA walls are small and lack both. Only classify as an
+  // interstitial when there is NO product signal — otherwise phrases like
+  // "request blocked" buried in a legitimate page's JavaScript trigger false
+  // positives (a real ₹18,999 product page was being reported as blocked).
+  const looksLikeProduct =
+    html.length > 150_000 ||
+    /"@type"\s*:\s*"Product"/.test(html) ||
+    /"(?:finalPrice|sellingPrice)"\s*:/.test(html);
+  if (looksLikeProduct) return;
+
   if (/are you a human|unusual traffic|verify you'?re not a robot/i.test(html)) {
     throw new CheckError('captcha', 'Flipkart presented a verification challenge');
   }

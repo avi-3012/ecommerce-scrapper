@@ -56,6 +56,33 @@ describe('flipkart fixture suite (WP-1.3)', () => {
     );
   });
 
+  it('does NOT false-positive as blocked when "request blocked" appears in a real page\'s JS', () => {
+    // Regression: a genuine product page whose embedded JS contains the phrase
+    // "request blocked" must still parse, not be reported as fetch_blocked.
+    const html = `<!doctype html><html><head>
+      <link rel="canonical" href="https://www.flipkart.com/x/p/itm017656bdd097b?pid=MOBH9JUSZHCX3JRG" />
+      <script type="application/ld+json">{"@type":"Product","name":"Vivo T4x 5G","offers":{"price":"18999","availability":"https://schema.org/InStock"}}</script>
+      <script>var errs={accessDenied:"access denied",blocked:"request blocked"};</script>
+      </head><body><h1><span>Vivo T4x 5G</span></h1></body></html>`;
+    const snap = parseFlipkartPage(html, { pid: 'MOBH9JUSZHCX3JRG' });
+    expect(snap.price).toBe(18999);
+    expect(snap.stockStatus).toBe('in_stock');
+  });
+
+  it('extracts price from embedded state JSON when JSON-LD lacks it (obfuscated DOM)', () => {
+    const html = `<!doctype html><html><head>
+      <link rel="canonical" href="https://www.flipkart.com/x/p/itm017656bdd097b?pid=MOBH9JUSZHCX3JRG" />
+      <script type="application/ld+json">{"@type":"Product","name":"Vivo T4x 5G"}</script>
+      </head><body><h1><span>Vivo T4x 5G</span></h1>
+      <script>window.__STATE__={"pricing":{"finalPrice":18999,"mrp":19499}};</script>
+      </body></html>`;
+    const snap = parseFlipkartPage(html, { pid: 'MOBH9JUSZHCX3JRG' });
+    expect(snap.price).toBe(18999);
+    expect(snap.mrp).toBe(19499);
+    expect(snap.stockStatus).toBe('in_stock');
+    expect(snap.provenance.price).toBe('embedded-json');
+  });
+
   it('fixture: ID mismatch fails as parse_failed (variant discipline, R-5)', () => {
     expect(() =>
       parseFlipkartPage(fixture('jsonld-in-stock'), { pid: 'WRONGPID12345678' }),
