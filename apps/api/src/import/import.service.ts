@@ -10,6 +10,36 @@ import { PrismaService } from '../prisma.service.js';
 /** How many short links to resolve in parallel during a bulk import (WP-2.9). */
 const RESOLVE_CONCURRENCY = 6;
 
+/**
+ * Extract a plain string from any ExcelJS cell. Excel auto-linkifies URLs, so a
+ * URL cell is a hyperlink object { text, hyperlink } — naive String() gives
+ * "[object Object]". Also handles rich text and formula cells. For hyperlinks
+ * the target URL is preferred over the display text.
+ */
+function cellToString(cell: ExcelJS.Cell): string {
+  const v = cell.value as unknown;
+  if (v === null || v === undefined) return '';
+  if (typeof v === 'object') {
+    const obj = v as {
+      hyperlink?: string;
+      text?: unknown;
+      richText?: Array<{ text?: string }>;
+      result?: unknown;
+    };
+    if (obj.hyperlink) return String(obj.hyperlink).trim();
+    if (obj.richText)
+      return obj.richText
+        .map((rt) => rt.text ?? '')
+        .join('')
+        .trim();
+    if (obj.text !== undefined && obj.text !== null) return String(obj.text).trim();
+    if (obj.result !== undefined && obj.result !== null) return String(obj.result).trim();
+    // Fallback to ExcelJS's rendered text (dates, etc.)
+    return String(cell.text ?? '').trim();
+  }
+  return String(v).trim();
+}
+
 /** Run an async mapper over items with a bounded number of concurrent workers. */
 async function mapWithConcurrency<T, R>(
   items: T[],
@@ -272,7 +302,7 @@ export class ImportService {
     if (!sheet) throw new BadRequestException('The workbook has no sheets');
     const headers: string[] = [];
     sheet.getRow(1).eachCell((cell, col) => {
-      headers[col] = String(cell.value ?? '').trim();
+      headers[col] = cellToString(cell);
     });
     const rows: ImportRow[] = [];
     sheet.eachRow((row, rowNumber) => {
@@ -280,7 +310,7 @@ export class ImportService {
       const record: Record<string, string> = {};
       row.eachCell((cell, col) => {
         const header = headers[col];
-        if (header) record[header] = String(cell.value ?? '').trim();
+        if (header) record[header] = cellToString(cell);
       });
       rows.push(this.mapRow(record, rowNumber));
     });
