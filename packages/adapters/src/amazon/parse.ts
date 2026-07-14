@@ -49,22 +49,50 @@ export function parseAmazonPage(html: string, expectedAsin?: string): ProductSna
   }
 
   // ── Price (strategy order: core price block → legacy ids → any offscreen price) ──
+  // Amazon serves several buy-box price layouts. Try known price containers in
+  // order — each is a genuine buy-box/price region, never an accessory or EMI
+  // widget, so we avoid the page-wide `.a-price` fallback that used to grab
+  // garbage (a ₹499 add-on) on out-of-stock pages.
   let price: number | null = null;
-  const coreOffscreen = $(
-    '#corePriceDisplay_desktop_feature_div .a-price .a-offscreen, #apex_desktop .a-price .a-offscreen',
-  )
-    .first()
-    .text();
-  price = parseInrAmount(coreOffscreen);
-  if (price !== null) provenance.price = 'core-price-block';
-  if (price === null) {
-    price = parseInrAmount($('#priceblock_ourprice, #priceblock_dealprice').first().text());
-    if (price !== null) provenance.price = 'legacy-price-id';
+  const priceSelectors = [
+    '#corePriceDisplay_desktop_feature_div .priceToPay .a-offscreen',
+    '#corePriceDisplay_desktop_feature_div .a-price:not(.a-text-price) .a-offscreen',
+    '#corePrice_feature_div .a-price:not(.a-text-price) .a-offscreen',
+    '#apex_desktop .a-price:not(.a-text-price) .a-offscreen',
+    '#tp_price_block_total_price_ww .a-offscreen',
+    '.priceToPay .a-offscreen',
+    '#price_inside_buybox',
+    '#newBuyBoxPrice',
+    '#priceblock_ourprice',
+    '#priceblock_dealprice',
+    '#corePriceDisplay_mobile_feature_div .a-price:not(.a-text-price) .a-offscreen',
+  ];
+  for (const sel of priceSelectors) {
+    const value = parseInrAmount($(sel).first().text());
+    if (value !== null) {
+      price = value;
+      provenance.price = 'buy-box';
+      break;
+    }
   }
-  // Deliberately NO page-wide `.a-price` fallback: on an out-of-stock or
-  // unavailable listing the buy-box price is gone, and the first price on the
-  // page is usually an accessory, an EMI (“₹499/month”), or an add-on — which
-  // is exactly how out-of-stock items ended up with garbage prices.
+  // Some layouts leave `.a-offscreen` empty and render the price in
+  // `.a-price-whole` spans instead — fall back to those, still buy-box-scoped.
+  if (price === null) {
+    const wholeSelectors = [
+      '#corePriceDisplay_desktop_feature_div .priceToPay .a-price-whole',
+      '#tp_price_block_total_price_ww .a-price-whole',
+      '#corePrice_feature_div .a-price-whole',
+      '#apex_desktop .a-price-whole',
+    ];
+    for (const sel of wholeSelectors) {
+      const value = parseInrAmount($(sel).first().text());
+      if (value !== null) {
+        price = value;
+        provenance.price = 'buy-box-whole';
+        break;
+      }
+    }
+  }
 
   // A parsed buy-box price with no availability signal means a normal listing.
   if (stockStatus === 'unknown' && price !== null) {

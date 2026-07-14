@@ -21,7 +21,28 @@ describe('amazon fixture suite (WP-1.2)', () => {
     expect(snap.stockStatus).toBe('in_stock');
     expect(snap.marketplaceProductId).toBe('B0CHX1W1XY');
     expect(snap.imageUrl).toContain('media-amazon.com');
-    expect(snap.provenance.price).toBe('core-price-block');
+    expect(snap.provenance.price).toBe('buy-box');
+  });
+
+  it('extracts price from the total-price block / a-price-whole layout variant', () => {
+    // Amazon variant where priceToPay .a-offscreen is empty and the price lives
+    // in #tp_price_block_total_price_ww and .a-price-whole (regression for a
+    // real page that parsed 5× then failed as "could not extract price").
+    const html = `<!doctype html><html><body>
+      <span id="productTitle">realme NARZO 90x 5G</span>
+      <div id="availability"><span>In stock</span></div>
+      <div id="corePriceDisplay_desktop_feature_div">
+        <span class="a-price priceToPay"><span class="a-offscreen"></span>
+          <span class="a-price-whole">18,999</span></span>
+        <span class="a-price a-text-price apex-basisprice-value"><span class="a-offscreen">₹33,999</span></span>
+      </div>
+      <div id="tp_price_block_total_price_ww"><span class="a-price"><span class="a-offscreen">₹18,999.00</span></span></div>
+      <div id="warranty"><span class="a-price"><span class="a-offscreen">₹1,149</span></span></div>
+    </body></html>`;
+    const snap = parseAmazonPage(html, 'B0GZGBXWJZ');
+    expect(snap.price).toBe(18999); // not the ₹1,149 warranty
+    expect(snap.mrp).toBe(33999);
+    expect(snap.stockStatus).toBe('in_stock');
   });
 
   it('fixture: deal price with coupon and bank offers', () => {
