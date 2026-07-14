@@ -1,13 +1,10 @@
 import type { PrismaClient, Product } from '@pricepulse/db';
 import type { AdapterRegistry, FetchFn } from '@pricepulse/adapters';
-import { resolveFinalUrl } from '@pricepulse/adapters';
+import { resolveListingUrl } from '@pricepulse/adapters';
 import type { Marketplace, ProductSnapshot } from '@pricepulse/shared';
 import { performCheck } from './scrape/pipeline.js';
 import { recordCheck } from './scrape/record.js';
 import { getUserWithSettings } from './settings.js';
-
-/** Domains that are only ever share/short links and need redirect resolution. */
-const SHORT_LINK_HOSTS = new Set(['amzn.in', 'dl.flipkart.com']);
 
 export type PreviewResult =
   | {
@@ -49,21 +46,27 @@ export interface RegisterParams {
  */
 export async function previewUrl(deps: RegistrationDeps, input: string): Promise<PreviewResult> {
   const { prisma, registry } = deps;
-  let recognition = registry.recognize(input);
+  const trimmed = input.trim();
+  let recognition = registry.recognize(trimmed);
+  let effectiveUrl = trimmed;
 
-  // Short/share links carry no product id in the path — resolve redirects once.
-  if (recognition.kind === 'not_a_listing') {
-    const host = safeHost(input);
-    if (host && SHORT_LINK_HOSTS.has(host)) {
-      try {
-        recognition = registry.recognize(await resolveFinalUrl(input));
-      } catch {
-        return {
-          kind: 'fetch_failed',
-          reason: 'http_error',
-          message: 'Could not resolve the short link',
-        };
+  // Any share/affiliate short link (fkrt.co, amzn.in, amzn.to, pwap.in, …)
+  // carries no product id — follow its redirects to the real marketplace URL.
+  // resolveListingUrl stops at the listing URL without loading the marketplace
+  // page, so it's fast, cheap on proxy bandwidth, and dodges the anti-bot; it
+  // routes through SCRAPER_PROXY_URL when set.
+  if (recognition.kind !== 'listing') {
+    try {
+      const final = await resolveListingUrl(
+        trimmed,
+        (u) => registry.recognize(u).kind === 'listing',
+      );
+      if (final && final !== trimmed) {
+        effectiveUrl = final;
+        recognition = registry.recognize(final);
       }
+    } catch {
+      // resolution failed (blocked/unreachable) — fall through to the messages below
     }
   }
 
@@ -98,7 +101,7 @@ export async function previewUrl(deps: RegistrationDeps, input: string): Promise
   return {
     kind: 'preview',
     snapshot: outcome.snapshot,
-    url: input.trim(),
+    url: effectiveUrl,
     canonicalUrl: recognition.canonicalUrl,
     marketplace: recognition.marketplace,
     productId: recognition.productId,
@@ -171,12 +174,4 @@ export async function deletionImpact(
 /** Hard delete; history and alerts cascade (FR-1.6). Confirmation is the caller's job. */
 export async function deleteProduct(prisma: PrismaClient, id: string): Promise<void> {
   await prisma.product.delete({ where: { id } });
-}
-
-function safeHost(input: string): string | null {
-  try {
-    return new URL(input.trim()).hostname.toLowerCase().replace(/^www\./, '');
-  } catch {
-    return null;
-  }
 }
