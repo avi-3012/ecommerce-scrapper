@@ -46,6 +46,17 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
 
 // ── Response types (mirror the API; shared enums come from @pricepulse/shared) ──
 
+/** A user-defined product category (never scraped). */
+export interface Category {
+  id: string;
+  name: string;
+  color: string | null;
+  productCount: number;
+}
+
+/** Category as embedded on a product (no count). */
+export type CategoryRef = Pick<Category, 'id' | 'name' | 'color'>;
+
 export interface Product {
   id: string;
   marketplace: Marketplace;
@@ -54,6 +65,8 @@ export interface Product {
   displayName: string;
   imageUrl: string | null;
   tags: string[];
+  categoryId: string | null;
+  category: CategoryRef | null;
   notes: string;
   targetPrice: string | null;
   dropThresholdPct: string | null;
@@ -111,7 +124,23 @@ export interface AlertRow {
   deliveryStatus: DeliveryStatus;
   deliveryError: string | null;
   deliveredAt: string | null;
+  message: string | null;
   product: { displayName: string; marketplace: Marketplace; url: string } | null;
+}
+
+export interface TemplateVariable {
+  name: string;
+  description: string;
+}
+
+/** A per-alert-type notification template (custom override + built-in default). */
+export interface NotificationTemplate {
+  type: AlertType;
+  label: string;
+  /** The user's custom template; '' means the default is in use. */
+  template: string;
+  default: string;
+  variables: TemplateVariable[];
 }
 
 export interface SystemStatusReport {

@@ -20,6 +20,7 @@ function alert(
     deliveryStatus: 'delivered',
     deliveryError: null,
     deliveredAt: null,
+    message: null,
     product: { displayName: 'Test', marketplace: 'amazon_in', url: 'https://amazon.in' },
   };
 }

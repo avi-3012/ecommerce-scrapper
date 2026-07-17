@@ -167,7 +167,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       groups.set(key, [...(groups.get(key) ?? []), alert]);
     }
     for (const group of groups.values()) {
-      const message = group.map((a) => this.render(a)).join('\n\n');
+      const message = group.map((a) => this.render(a, settings)).join('\n\n');
       await this.sendAndRecord(ctx.bot, ctx.chatId, message, group);
     }
   }
@@ -183,6 +183,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     if (held.length === 0) return;
     const ctx = await this.getBot();
     if (!ctx || !ctx.chatId) return; // stays held; retried next dispatch
+    const { settings } = await getUserWithSettings(this.prisma);
 
     // Order by significance: target crossings, then biggest drops, then the rest
     const significance = (a: AlertWithProduct): number =>
@@ -192,7 +193,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           ? 1 - Math.min(0.99, Math.abs(Number(a.changePct ?? 0)) / 100)
           : 2;
     const ordered = [...held].sort((a, b) => significance(a) - significance(b));
-    const lines = ordered.map((a) => `• ${this.render(a).split('\n').slice(1).join(' — ')}`);
+    const lines = ordered.map(
+      (a) => `• ${this.render(a, settings).split('\n').slice(1).join(' — ')}`,
+    );
     const message = `🌙 <b>While you were away</b> — ${held.length} alert${held.length === 1 ? '' : 's'} held during quiet hours:\n\n${lines.join('\n')}`;
     await this.sendAndRecord(ctx.bot, ctx.chatId, message, held);
   }
@@ -287,25 +290,30 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     alerts: AlertWithProduct[],
   ): Promise<void> {
     const outcome = await this.sendWithRetry(bot, chatId, message);
+    // Persist the exact message that was sent so the UI can show it (FR-4.2).
     await this.prisma.alert.updateMany({
       where: { id: { in: alerts.map((a) => a.id) } },
       data: outcome.ok
-        ? { deliveryStatus: 'delivered', deliveredAt: new Date(), deliveryError: null }
-        : { deliveryStatus: 'failed', deliveryError: outcome.error },
+        ? { deliveryStatus: 'delivered', deliveredAt: new Date(), deliveryError: null, message }
+        : { deliveryStatus: 'failed', deliveryError: outcome.error, message },
     });
   }
 
-  private render(alert: AlertWithProduct): string {
-    return renderAlertMessage({
-      type: alert.type,
-      productName: alert.product?.displayName ?? 'PricePulse',
-      marketplace: alert.product?.marketplace ?? 'amazon_in',
-      listingUrl: alert.product?.url ?? '',
-      oldValue: alert.oldValue,
-      newValue: alert.newValue,
-      changePct: alert.changePct === null ? null : Number(alert.changePct),
-      firedAt: alert.firedAt,
-    });
+  private render(alert: AlertWithProduct, settings: Settings): string {
+    const templates = (settings.notificationTemplates ?? {}) as Record<string, string>;
+    return renderAlertMessage(
+      {
+        type: alert.type,
+        productName: alert.product?.displayName ?? 'PricePulse',
+        marketplace: alert.product?.marketplace ?? 'amazon_in',
+        listingUrl: alert.product?.url ?? '',
+        oldValue: alert.oldValue,
+        newValue: alert.newValue,
+        changePct: alert.changePct === null ? null : Number(alert.changePct),
+        firedAt: alert.firedAt,
+      },
+      { template: templates[alert.type], timezone: settings.timezone },
+    );
   }
 
   private async sendWithRetry(

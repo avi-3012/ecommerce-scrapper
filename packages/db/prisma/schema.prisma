@@ -109,8 +109,26 @@ model User {
   alerts        Alert[]
   settings      Settings?
   importBatches ImportBatch[]
+  categories    Category[]
 
   @@map("users")
+}
+
+// ── Categories (user-defined; never scraped) — a product may have one ──
+
+model Category {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  name      String
+  color     String? // optional hex colour for the UI chip
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  products Product[]
+
+  @@unique([userId, name])
+  @@map("categories")
 }
 
 // ── Tracked products (§3.2) ──
@@ -131,6 +149,7 @@ model Product {
   status               ProductStatus @default(active)
   consecutiveFailures  Int           @default(0) @map("consecutive_failures")
   linkedProductId      String?       @unique @map("linked_product_id") @db.Uuid
+  categoryId           String?       @map("category_id") @db.Uuid
 
   // Current-state snapshot, denormalised for the catalogue view (FR-5.2)
   currentPrice       Decimal?    @map("current_price") @db.Decimal(12, 2)
@@ -157,6 +176,7 @@ model Product {
   deletedAt DateTime? @map("deleted_at") @db.Timestamptz(6)
 
   user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category      Category?      @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   linkedProduct Product?       @relation("LinkedPair", fields: [linkedProductId], references: [id])
   linkedBy      Product?       @relation("LinkedPair")
   history       PriceHistory[]
@@ -166,6 +186,7 @@ model Product {
   @@unique([userId, canonicalUrl])
   // Scheduler queue (WP-1.5)
   @@index([status, nextCheckAt])
+  @@index([categoryId])
   @@map("products")
 }
 
@@ -214,6 +235,8 @@ model Alert {
   deliveredAt      DateTime?      @map("delivered_at") @db.Timestamptz(6)
   // Milestone 3 alert hygiene: set when delivery was withheld (e.g. cooldown)
   suppressedReason String?        @map("suppressed_reason")
+  // The exact rendered Telegram message (so the UI can show what was sent)
+  message          String?
 
   user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   product Product? @relation(fields: [productId], references: [id], onDelete: Cascade)
@@ -251,6 +274,11 @@ model Settings {
   nearLowThresholdPct     Decimal         @default(2) @map("near_low_threshold_pct") @db.Decimal(5, 2)
 
   timezone String @default("Asia/Kolkata")
+
+  // User-customised Telegram message templates, keyed by alert type
+  // ({ [alertType]: templateString }). Missing keys fall back to the built-in
+  // default template. Fully user-editable (notification template editor).
+  notificationTemplates Json @default("{}") @map("notification_templates")
 
   // Encrypted at rest (AES-256-GCM, key from environment — plan §8.4)
   telegramBotTokenEnc String? @map("telegram_bot_token_enc")

@@ -37,6 +37,7 @@ export interface RegisterParams {
   dropThresholdPct?: number | null;
   notes?: string;
   tags?: string[];
+  categoryId?: string | null;
 }
 
 /**
@@ -132,6 +133,7 @@ export async function registerProduct(
       notes: params.notes ?? '',
       targetPrice: params.targetPrice ?? null,
       dropThresholdPct: params.dropThresholdPct ?? null,
+      categoryId: params.categoryId ?? null,
       status: 'active',
       nextCheckAt: new Date(),
     },

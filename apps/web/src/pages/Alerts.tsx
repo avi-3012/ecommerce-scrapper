@@ -1,6 +1,7 @@
+import { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Bell } from 'lucide-react';
+import { Bell, ChevronDown, ChevronUp } from 'lucide-react';
 import { api, errorMessage, relTime } from '../api.js';
 import type { AlertRow, Paged } from '../api.js';
 import { useToast } from '../toast.js';
@@ -18,11 +19,28 @@ const TYPE_LABELS: Record<string, string> = {
   system_health: '🩺 System health',
 };
 
+/** Render Telegram's HTML subset for display; strip anything script-like. */
+function telegramHtmlToSafe(html: string): string {
+  return html
+    .replace(/<\s*(script|style)[^>]*>[\s\S]*?<\s*\/\s*\1\s*>/gi, '')
+    .replace(/ on\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+    .replace(/javascript:/gi, '');
+}
+
 export function AlertsPage(): JSX.Element {
   const [params, setParams] = useSearchParams();
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const queryClient = useQueryClient();
   const toast = useToast();
   const queryString = params.toString();
+
+  const toggle = (id: string): void =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
 
   const { data, isLoading } = useQuery({
     queryKey: ['alerts', queryString],
@@ -101,6 +119,14 @@ export function AlertsPage(): JSX.Element {
                   {a.product && <MarketplaceBadge marketplace={a.product.marketplace} />}
                   <DeliveryBadge alert={a} />
                   <span className="text-xs text-fg-subtle">{relTime(a.firedAt)}</span>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    icon={expanded.has(a.id) ? ChevronUp : ChevronDown}
+                    onClick={() => toggle(a.id)}
+                  >
+                    Message
+                  </Button>
                   {a.deliveryStatus === 'failed' && (
                     <Button
                       variant="secondary"
@@ -115,6 +141,26 @@ export function AlertsPage(): JSX.Element {
               </div>
               {a.deliveryStatus === 'failed' && a.deliveryError && (
                 <p className="mt-1 text-xs text-danger-fg">Delivery failed: {a.deliveryError}</p>
+              )}
+              {expanded.has(a.id) && (
+                <div className="mt-2 rounded-lg bg-surface-2 p-3">
+                  <p className="mb-1.5 text-xs font-medium uppercase tracking-wide text-fg-subtle">
+                    Exact message sent
+                  </p>
+                  {a.message ? (
+                    <div
+                      className="whitespace-pre-wrap break-words text-sm leading-relaxed text-fg"
+                      dangerouslySetInnerHTML={{ __html: telegramHtmlToSafe(a.message) }}
+                    />
+                  ) : (
+                    <p className="text-sm text-fg-subtle">
+                      No message recorded{' '}
+                      {a.deliveryStatus === 'pending'
+                        ? '— this alert has not been sent yet.'
+                        : '(alert predates message capture).'}
+                    </p>
+                  )}
+                </div>
               )}
             </Card>
           ))}

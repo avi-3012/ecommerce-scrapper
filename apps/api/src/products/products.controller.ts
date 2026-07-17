@@ -51,6 +51,7 @@ const configurableFields = {
   dropThresholdPct: z.number().min(0).max(99).nullable().optional(),
   notes: z.string().max(5000).optional(),
   tags: z.array(z.string().min(1).max(50)).max(20).optional(),
+  categoryId: z.string().uuid().nullable().optional(),
 };
 
 const registerSchema = z.object({
@@ -68,6 +69,8 @@ const listQuerySchema = z.object({
   search: z.string().optional(),
   marketplace: z.enum(MARKETPLACES).optional(),
   tag: z.string().optional(),
+  /** A category id, or 'none' for products with no category. */
+  category: z.string().optional(),
   stock: z.enum(STOCK_STATUSES).optional(),
   status: z.enum(PRODUCT_STATUSES).optional(),
   health: z.enum(['healthy', 'failing', 'auto_paused']).optional(),
@@ -146,6 +149,11 @@ export class ProductsController {
         : {}),
       ...(q.marketplace ? { marketplace: q.marketplace } : {}),
       ...(q.tag ? { tags: { has: q.tag } } : {}),
+      ...(q.category === 'none'
+        ? { categoryId: null }
+        : q.category
+          ? { categoryId: q.category }
+          : {}),
       ...(q.stock ? { currentStockStatus: q.stock } : {}),
       ...(q.status ? { status: q.status } : {}),
       ...(q.health === 'auto_paused' ? { status: 'paused_auto' as const } : {}),
@@ -158,6 +166,7 @@ export class ProductsController {
         orderBy: SORT_ORDER[q.sort] ?? SORT_ORDER.recent,
         skip: (q.page - 1) * q.pageSize,
         take: q.pageSize,
+        include: { category: { select: { id: true, name: true, color: true } } },
       }),
       this.prisma.product.count({ where }),
     ]);
@@ -166,7 +175,10 @@ export class ProductsController {
 
   @Get(':id')
   async get(@Param('id') id: string) {
-    const product = await this.prisma.product.findUnique({ where: { id } });
+    const product = await this.prisma.product.findUnique({
+      where: { id },
+      include: { category: { select: { id: true, name: true, color: true } } },
+    });
     if (!product) throw new NotFoundException();
     return product;
   }
@@ -322,7 +334,12 @@ export class ProductsController {
   async edit(@Param('id') id: string, @Body() body: unknown) {
     const changes = parseBody(editSchema, body);
     await this.ensureExists(id);
-    return this.prisma.product.update({ where: { id }, data: changes });
+    if (changes.categoryId) await this.ensureCategoryExists(changes.categoryId);
+    return this.prisma.product.update({
+      where: { id },
+      data: changes,
+      include: { category: { select: { id: true, name: true, color: true } } },
+    });
   }
 
   @Post(':id/pause')
@@ -377,5 +394,13 @@ export class ProductsController {
   private async ensureExists(id: string): Promise<void> {
     const exists = await this.prisma.product.findUnique({ where: { id }, select: { id: true } });
     if (!exists) throw new NotFoundException();
+  }
+
+  private async ensureCategoryExists(categoryId: string): Promise<void> {
+    const exists = await this.prisma.category.findUnique({
+      where: { id: categoryId },
+      select: { id: true },
+    });
+    if (!exists) throw new BadRequestException({ message: 'Unknown category' });
   }
 }

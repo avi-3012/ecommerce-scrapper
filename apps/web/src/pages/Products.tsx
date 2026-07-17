@@ -3,6 +3,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Flame,
+  FolderCog,
   LayoutGrid,
   Link2,
   List,
@@ -14,13 +15,14 @@ import {
   Trash2,
 } from 'lucide-react';
 import { api, errorMessage, inr, isNearLow, relTime } from '../api.js';
-import type { Paged, Product } from '../api.js';
+import type { Category, Paged, Product } from '../api.js';
 import { useToast } from '../toast.js';
 import {
   Badge,
   Button,
   Card,
   CardSkeleton,
+  CategoryChip,
   ConfirmDialog,
   EmptyState,
   IconButton,
@@ -31,10 +33,12 @@ import {
   StockBadge,
 } from '../ui.js';
 import { Pagination, PriceChange } from '../components.js';
+import { CategoryManager } from '../CategoryManager.js';
 
 export function ProductsPage(): JSX.Element {
   const [params, setParams] = useSearchParams();
   const [deleting, setDeleting] = useState<Product | null>(null);
+  const [manageCategories, setManageCategories] = useState(false);
   const [view, setView] = useState<'list' | 'grid'>('list');
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -45,6 +49,11 @@ export function ProductsPage(): JSX.Element {
     queryKey: ['products', queryString],
     queryFn: () => api<Paged<Product>>(`/products?${queryString}`),
     refetchInterval: 60_000,
+  });
+
+  const { data: categories } = useQuery({
+    queryKey: ['categories'],
+    queryFn: () => api<Category[]>('/categories'),
   });
 
   const invalidate = (): void => {
@@ -128,6 +137,23 @@ export function ProductsPage(): JSX.Element {
           <option value="amazon_in">Amazon.in</option>
           <option value="flipkart">Flipkart</option>
         </Select>
+        <Select
+          value={params.get('category') ?? ''}
+          onChange={(e) => setFilter('category', e.target.value)}
+        >
+          <option value="">All categories</option>
+          {categories?.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.name}
+            </option>
+          ))}
+          <option value="none">— Uncategorized —</option>
+        </Select>
+        <IconButton
+          icon={FolderCog}
+          label="Manage categories"
+          onClick={() => setManageCategories(true)}
+        />
         <Select
           value={params.get('stock') ?? ''}
           onChange={(e) => setFilter('stock', e.target.value)}
@@ -231,6 +257,8 @@ export function ProductsPage(): JSX.Element {
         onPage={(p) => setFilter('page', String(p))}
       />
 
+      <CategoryManager open={manageCategories} onClose={() => setManageCategories(false)} />
+
       <ConfirmDialog
         open={deleting !== null}
         title={`Delete “${deleting?.displayName}”?`}
@@ -258,6 +286,7 @@ function MetaBadges({ product }: { product: Product }): JSX.Element {
   return (
     <div className="mt-1 flex flex-wrap items-center gap-1.5">
       <MarketplaceBadge marketplace={product.marketplace} />
+      {product.category && <CategoryChip category={product.category} />}
       <StockBadge stock={product.currentStockStatus} />
       <StatusBadge status={product.status} />
       {isNearLow(product) && (

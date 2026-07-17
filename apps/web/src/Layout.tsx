@@ -6,6 +6,7 @@ import {
   Download,
   LayoutDashboard,
   LogOut,
+  MessageSquare,
   Moon,
   Package,
   Settings2,
@@ -23,6 +24,7 @@ const NAV: Array<{ to: string; label: string; icon: LucideIcon }> = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/products', label: 'Products', icon: Package },
   { to: '/alerts', label: 'Alerts', icon: Bell },
+  { to: '/notifications', label: 'Templates', icon: MessageSquare },
   { to: '/import', label: 'Import', icon: Download },
   { to: '/settings', label: 'Settings', icon: Settings2 },
 ];

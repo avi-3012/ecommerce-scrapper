@@ -1,10 +1,20 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import { Search } from 'lucide-react';
 import { api, errorMessage, inr } from '../api.js';
-import type { PreviewResult, Product } from '../api.js';
-import { Button, Card, ErrorNote, Field, Input, MarketplaceBadge, StockBadge } from '../ui.js';
+import type { Category, PreviewResult, Product } from '../api.js';
+import {
+  Button,
+  Card,
+  ErrorNote,
+  Field,
+  Input,
+  MarketplaceBadge,
+  OfferList,
+  Select,
+  StockBadge,
+} from '../ui.js';
 
 /** Registration flow (WP-2.5): paste URL → live preview (FR-1.3) → configure → save. */
 export function AddProductPage(): JSX.Element {
@@ -16,7 +26,12 @@ export function AddProductPage(): JSX.Element {
   const [targetPrice, setTargetPrice] = useState('');
   const [threshold, setThreshold] = useState('');
   const [tags, setTags] = useState('');
+  const [categoryId, setCategoryId] = useState('');
   const [notes, setNotes] = useState('');
+  const { data: categories } = useQuery({
+    queryKey: ['categories'],
+    queryFn: () => api<Category[]>('/categories'),
+  });
 
   const previewMutation = useMutation({
     mutationFn: (input: string) => {
@@ -77,6 +92,7 @@ export function AddProductPage(): JSX.Element {
                 .map((t) => t.trim())
                 .filter(Boolean)
             : undefined,
+          categoryId: categoryId || undefined,
         }),
       }),
     onSuccess: (product) => navigate(`/products/${product.id}`),
@@ -132,13 +148,7 @@ export function AddProductPage(): JSX.Element {
                   </span>
                 )}
               </p>
-              {s.offers.length > 0 && (
-                <ul className="mt-2 space-y-0.5 text-xs text-fg-muted">
-                  {s.offers.map((o) => (
-                    <li key={o.description}>🏷️ {o.description}</li>
-                  ))}
-                </ul>
-              )}
+              {s.offers.length > 0 && <OfferList offers={s.offers} className="mt-2" />}
             </div>
           </div>
 
@@ -177,6 +187,16 @@ export function AddProductPage(): JSX.Element {
                 onChange={(e) => setTags(e.target.value)}
                 placeholder="phone, gift ideas"
               />
+            </Field>
+            <Field label="Category (optional)">
+              <Select value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
+                <option value="">No category</option>
+                {categories?.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </Select>
             </Field>
             <div className="sm:col-span-2">
               <Field label="Notes">

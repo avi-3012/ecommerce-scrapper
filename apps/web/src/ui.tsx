@@ -12,7 +12,8 @@ import type {
 } from 'react';
 import { Loader2, X } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import type { Marketplace, ProductStatus, StockStatus } from '@pricepulse/shared';
+import type { Marketplace, Offer, OfferType, ProductStatus, StockStatus } from '@pricepulse/shared';
+import { OFFER_TYPE_LABELS } from '@pricepulse/shared';
 
 // ── Button ──────────────────────────────────────────────────────────────
 
@@ -179,6 +180,59 @@ export function Badge({
     >
       {Icon && <Icon className="size-3" aria-hidden />}
       {children}
+    </span>
+  );
+}
+
+const OFFER_TONE: Record<OfferType, Tone> = {
+  bank_offer: 'info',
+  no_cost_emi: 'brand',
+  cashback: 'success',
+  coupon: 'warning',
+  exchange: 'neutral',
+  partner: 'neutral',
+  other: 'neutral',
+};
+
+/**
+ * Renders a listing's offers, each an individual offer tagged by category
+ * (Bank Offer, No Cost EMI, Cashback, Coupon, Partner Offer, …).
+ */
+export function OfferList({
+  offers,
+  className = '',
+}: {
+  offers: Offer[];
+  className?: string;
+}): JSX.Element {
+  return (
+    <ul className={`space-y-1.5 ${className}`}>
+      {offers.map((o) => (
+        <li key={`${o.type}:${o.description}`} className="flex items-start gap-2 text-sm">
+          <Badge tone={OFFER_TONE[o.type] ?? 'neutral'}>
+            {OFFER_TYPE_LABELS[o.type] ?? 'Offer'}
+          </Badge>
+          <span className="text-fg-muted">{o.description}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** A small chip for a user-defined category: colour dot + name. */
+export function CategoryChip({
+  category,
+}: {
+  category: { name: string; color: string | null };
+}): JSX.Element {
+  return (
+    <span className="inline-flex items-center gap-1 rounded-md border border-line px-1.5 py-0.5 text-xs font-medium text-fg-muted">
+      <span
+        className="size-2 rounded-full"
+        style={{ backgroundColor: category.color ?? 'var(--color-fg-subtle, #9ca3af)' }}
+        aria-hidden
+      />
+      {category.name}
     </span>
   );
 }

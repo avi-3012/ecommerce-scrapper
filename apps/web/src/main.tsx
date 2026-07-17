@@ -13,6 +13,7 @@ import { AddProductPage } from './pages/AddProduct.js';
 import { ProductDetailPage } from './pages/ProductDetail.js';
 import { AlertsPage } from './pages/Alerts.js';
 import { SettingsPage } from './pages/Settings.js';
+import { NotificationTemplatesPage } from './pages/NotificationTemplates.js';
 import { ImportPage } from './pages/Import.js';
 
 const queryClient = new QueryClient({
@@ -30,6 +31,7 @@ const router = createBrowserRouter([
       { path: '/products/:id', element: <ProductDetailPage /> },
       { path: '/alerts', element: <AlertsPage /> },
       { path: '/import', element: <ImportPage /> },
+      { path: '/notifications', element: <NotificationTemplatesPage /> },
       { path: '/settings', element: <SettingsPage /> },
     ],
   },

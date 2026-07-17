@@ -4,7 +4,15 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ExternalLink, Pause, Play, RefreshCw, Trash2 } from 'lucide-react';
 import { FAILURE_REASON_LABELS } from '@pricepulse/shared';
 import { api, errorMessage, inr, isNearLow, relTime } from '../api.js';
-import type { ApiError, ChartData, CompareData, HistoryRow, Paged, Product } from '../api.js';
+import type {
+  ApiError,
+  Category,
+  ChartData,
+  CompareData,
+  HistoryRow,
+  Paged,
+  Product,
+} from '../api.js';
 import { useToast } from '../toast.js';
 import {
   Button,
@@ -16,7 +24,9 @@ import {
   Input,
   MarketplaceBadge,
   Modal,
+  OfferList,
   RangeMeter,
+  Select,
   Skeleton,
   StatusBadge,
   StockBadge,
@@ -261,14 +271,7 @@ export function ProductDetailPage(): JSX.Element {
       {product.currentOffers.length > 0 && (
         <Card className="p-4">
           <h2 className="mb-2 font-medium text-fg">Current offers</h2>
-          <ul className="space-y-1 text-sm text-fg-muted">
-            {product.currentOffers.map((o) => (
-              <li key={o.description} className="flex gap-2">
-                <span aria-hidden>🏷️</span>
-                {o.description}
-              </li>
-            ))}
-          </ul>
+          <OfferList offers={product.currentOffers} />
         </Card>
       )}
 
@@ -529,7 +532,12 @@ function EditPanel({
   const [targetPrice, setTargetPrice] = useState(product.targetPrice ?? '');
   const [threshold, setThreshold] = useState(product.dropThresholdPct ?? '');
   const [tags, setTags] = useState(product.tags.join(', '));
+  const [categoryId, setCategoryId] = useState(product.categoryId ?? '');
   const [notes, setNotes] = useState(product.notes);
+  const { data: categories } = useQuery({
+    queryKey: ['categories'],
+    queryFn: () => api<Category[]>('/categories'),
+  });
 
   return (
     <Card className="p-4">
@@ -561,6 +569,16 @@ function EditPanel({
             onChange={(e) => setThreshold(e.target.value)}
           />
         </Field>
+        <Field label="Category">
+          <Select value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
+            <option value="">No category</option>
+            {categories?.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </Select>
+        </Field>
         <Field label="Tags">
           <Input value={tags} onChange={(e) => setTags(e.target.value)} />
         </Field>
@@ -588,6 +606,7 @@ function EditPanel({
                 .split(',')
                 .map((t) => t.trim())
                 .filter(Boolean),
+              categoryId: categoryId || null,
               notes,
             })
           }
