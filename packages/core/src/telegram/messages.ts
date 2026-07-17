@@ -79,11 +79,11 @@ export const DEFAULT_TEMPLATES: Record<AlertType, string> = {
     '',
     'Price:   {{price}}',
     '',
-    'Old offers:',
-    '{{oldOffers}}',
+    '➕ New offers:',
+    '{{addedOffers}}',
     '',
-    'New offers:',
-    '{{newOffers}}',
+    '➖ Removed offers:',
+    '{{removedOffers}}',
     '',
     '🔗 {{link}}',
     '⏰ {{time}}',
@@ -195,9 +195,9 @@ function money(v: unknown): string {
   return n === null ? '—' : formatInr(n);
 }
 
-function offerList(value: unknown): string {
+function offerList(value: unknown, emptyText = 'No offers'): string {
   const offers = Array.isArray(value) ? (value as Offer[]) : [];
-  if (offers.length === 0) return 'No offers';
+  if (offers.length === 0) return emptyText;
   return offers.map((o) => `• ${escapeHtml(o.description)}`).join('\n');
 }
 
@@ -257,8 +257,8 @@ export function buildAlertVariables(
     target: money(newVal.target),
     oldOffers: offerList(oldVal.offers),
     newOffers: offerList(newVal.offers),
-    addedOffers: offerList(newVal.added),
-    removedOffers: offerList(newVal.removed),
+    addedOffers: offerList(newVal.added, 'None'),
+    removedOffers: offerList(newVal.removed, 'None'),
     failureReason:
       FAILURE_REASON_LABELS[newVal.failureReason as FailureReason] ?? 'Repeated failures',
     failureCount: String(num(newVal.consecutiveFailures) ?? 0),
@@ -311,12 +311,19 @@ export function sampleAlertInput(type: AlertType): AlertMessageInput {
       };
     case 'price_change':
       return { ...base, changePct: 7.7, oldValue: { price: 64900 }, newValue: { price: 69900 } };
-    case 'offer_change':
+    case 'offer_change': {
+      // A realistic incremental change: one offer's amount changed (so the old
+      // wording is removed and the new one added) — most offers stay the same.
+      const added: Offer[] = [
+        { type: 'cashback', description: 'Flipkart Axis — Debit Card • Cashback — ₹750 off' },
+      ];
+      const removed: Offer[] = [offers[2]!];
       return {
         ...base,
-        oldValue: { offers: [] },
-        newValue: { offers, added: offers, removed: [], price: 69900 },
+        oldValue: { offers: [offers[0]!, offers[1]!, offers[2]!] },
+        newValue: { offers: [offers[0]!, offers[1]!, ...added], added, removed, price: 69900 },
       };
+    }
     case 'back_in_stock':
       return {
         ...base,

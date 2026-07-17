@@ -10,13 +10,29 @@ import {
 const firedAt = new Date('2026-07-01T01:51:00+05:30');
 
 describe('template variables', () => {
-  it('builds price + offer variables for an offer change', () => {
+  it('builds price + offer diff variables for an offer change', () => {
     const vars = buildAlertVariables(sampleAlertInput('offer_change'), 'Asia/Kolkata');
     expect(vars.price).toBe('₹69,900');
-    expect(vars.newOffers).toContain('• Flipkart Axis — Credit Card • Cashback — ₹3,495 off');
-    expect(vars.oldOffers).toBe('No offers');
+    // The default template shows the diff, not the full before/after lists.
+    expect(vars.addedOffers).toBe('• Flipkart Axis — Debit Card • Cashback — ₹750 off');
+    expect(vars.removedOffers).toBe('• Paytm — UPI • Cashback — ₹50 off');
     expect(vars.marketplace).toBe('Flipkart');
     expect(vars.time).toBe('01 Jul 2026, 01:51 AM');
+  });
+
+  it('added/removed offer lists say "None" when empty', () => {
+    const vars = buildAlertVariables({
+      type: 'offer_change',
+      productName: 'x',
+      marketplace: 'flipkart',
+      listingUrl: '',
+      oldValue: { offers: [] },
+      newValue: { offers: [], added: [], removed: [] },
+      changePct: null,
+      firedAt,
+    });
+    expect(vars.addedOffers).toBe('None');
+    expect(vars.removedOffers).toBe('None');
   });
 
   it('directional label + arrow for a price increase vs decrease', () => {
@@ -77,10 +93,12 @@ describe('renderAlertMessage', () => {
     expect(msg).toBe('PRICE ₹64,900->₹69,900 ▲7.7%');
   });
 
-  it('falls back to the default template when none provided', () => {
+  it('falls back to the default template when none provided (shows the offer diff)', () => {
     const msg = renderAlertMessage(sampleAlertInput('offer_change'));
     expect(msg).toContain('🏷️ <b>Offer changed</b> — Flipkart');
-    expect(msg).toContain('New offers:');
+    expect(msg).toContain('➕ New offers:');
+    expect(msg).toContain('• Flipkart Axis — Debit Card • Cashback — ₹750 off');
+    expect(msg).toContain('➖ Removed offers:');
   });
 
   it('embeds the listing link under a label instead of the raw URL', () => {

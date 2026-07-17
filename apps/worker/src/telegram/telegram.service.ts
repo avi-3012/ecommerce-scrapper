@@ -19,8 +19,41 @@ import type { WorkerConfig } from '../config.js';
 
 const DISPATCH_PERIOD_MS = 5_000;
 const RETRY_DELAYS_MS = [1_000, 4_000, 10_000];
+// Telegram rejects messages over 4096 chars; keep headroom for a continuation note.
+const TELEGRAM_MAX = 4096;
+const CHUNK_MAX = 3900;
 
 type AlertWithProduct = Alert & { product: Product | null };
+
+/**
+ * Split an HTML message into Telegram-sized chunks at line boundaries so no
+ * chunk exceeds the limit and no `<a>`/`<b>` tag (each kept to a single line in
+ * our templates) is ever cut mid-tag. A pathologically long single line is
+ * hard-split as a last resort.
+ */
+export function splitForTelegram(html: string, max = CHUNK_MAX): string[] {
+  if (html.length <= max) return [html];
+  const chunks: string[] = [];
+  let current = '';
+  for (const line of html.split('\n')) {
+    if (line.length > max) {
+      if (current) {
+        chunks.push(current);
+        current = '';
+      }
+      for (let i = 0; i < line.length; i += max) chunks.push(line.slice(i, i + max));
+      continue;
+    }
+    if (current.length + line.length + 1 > max) {
+      chunks.push(current);
+      current = line;
+    } else {
+      current = current ? `${current}\n${line}` : line;
+    }
+  }
+  if (current) chunks.push(current);
+  return chunks;
+}
 
 /**
  * The Telegram notification channel (WP-1.8) with Milestone 3 hygiene
@@ -321,6 +354,20 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     chatId: string,
     html: string,
   ): Promise<{ ok: true } | { ok: false; error: string }> {
+    // Long alerts (many offers) exceed Telegram's 4096-char cap — send in parts.
+    const chunks = html.length > TELEGRAM_MAX ? splitForTelegram(html) : [html];
+    for (const chunk of chunks) {
+      const outcome = await this.sendChunk(bot, chatId, chunk);
+      if (!outcome.ok) return outcome;
+    }
+    return { ok: true };
+  }
+
+  private async sendChunk(
+    bot: Bot,
+    chatId: string,
+    html: string,
+  ): Promise<{ ok: true } | { ok: false; error: string }> {
     let lastError = '';
     for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
       try {
@@ -331,7 +378,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         return { ok: true };
       } catch (err) {
         lastError = err instanceof Error ? err.message : String(err);
-        if (/401|chat not found|bot was blocked/i.test(lastError)) break;
+        // Non-transient client errors won't recover on retry — fail fast.
+        if (/401|chat not found|bot was blocked|too long|can't parse/i.test(lastError)) break;
         const retryAfter = (err as { parameters?: { retry_after?: number } }).parameters
           ?.retry_after;
         const delay = retryAfter ? retryAfter * 1000 : RETRY_DELAYS_MS[attempt];
