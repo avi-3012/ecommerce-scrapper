@@ -61,7 +61,10 @@ function extractOfferCards($: cheerio.CheerioAPI): OfferCard[] {
   $('.offers-items').each((_i, el) => {
     const card = $(el);
     const title = card.find('.offers-items-title').first().text().replace(/\s+/g, ' ').trim();
-    const summary = card.find('.offers-items-content').first().text().replace(/\s+/g, ' ').trim();
+    // Strip the `a-truncate-cut` ellipsis copy so the summary text is stable.
+    const summaryEl = card.find('.offers-items-content').first().clone();
+    summaryEl.find('.a-truncate-cut').remove();
+    const summary = summaryEl.text().replace(/\s+/g, ' ').trim();
     const count = Number(card.find('.vsx-offers-count').first().text().match(/\d+/)?.[0]) || 1;
     let config: SideSheetConfig | undefined;
     const raw = card.find('[data-side-sheet]').attr('data-side-sheet');
@@ -105,15 +108,19 @@ export function parseSecondaryViewOffers(html: string): string[] {
   const offers: string[] = [];
   $('.vsx-offers-desktop-lv__item').each((_i, el) => {
     const node = $(el).clone();
-    node.find('a, button').remove(); // drop "See details" affordances
-    // Strip the positional "Offer N" prefix: Amazon returns the offers in a
-    // varying order, so the number is not part of the offer's identity — keeping
-    // it would fire false "offer changed" alerts on every reshuffle.
+    // Drop "See details" links AND Amazon's `a-truncate-cut` copy: the truncate
+    // widget ships the full text plus an ellipsized duplicate, and whether the
+    // duplicate is present varies between responses — so `.text()` would
+    // intermittently double the string and flap the offer-change alert.
+    node.find('a, button, script, style, .a-truncate-cut').remove();
+    // Strip the positional "Offer N" prefix (Amazon returns offers in a varying
+    // order) and any dangling " ." left after removing the "See details" link.
     const text = node
       .text()
       .replace(/\s+/g, ' ')
       .trim()
       .replace(/^Offer\s+\d+\s*/i, '')
+      .replace(/\s+\.\s*$/, '.')
       .trim();
     if (text) offers.push(text);
   });

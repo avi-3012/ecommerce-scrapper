@@ -88,7 +88,7 @@ export async function recordCheck(
 
   const { snapshot } = outcome;
   const previous = previousStateOf(product);
-  const { events, targetCrossed } = evaluateAlerts(
+  const { events: rawEvents, targetCrossed } = evaluateAlerts(
     previous,
     snapshot,
     {
@@ -110,10 +110,22 @@ export async function recordCheck(
   // checks carry null — we still record the check, but must NOT overwrite the
   // product's last known price with null (that would erase useful data and
   // break drop detection when it comes back in stock).
+  // A successful check that returns ZERO offers when we previously had some is
+  // almost always a transient extraction miss (especially Flipkart's
+  // client-rendered offers) — not every offer genuinely ending at once. Treat it
+  // as "offers not read this cycle": keep the last known offers and suppress the
+  // spurious all-removed offer_change.
+  const offersUnreliable =
+    snapshot.offers.length === 0 && previous !== null && previous.offers.length > 0;
+  const events = offersUnreliable
+    ? rawEvents.filter((event) => event.type !== 'offer_change')
+    : rawEvents;
+  const effectiveOffers = offersUnreliable && previous ? previous.offers : snapshot.offers;
+
   const hasLivePrice =
     snapshot.price !== null && snapshot.price > 0 && snapshot.stockStatus !== 'out_of_stock';
   const priceChanged = hasLivePrice && (previous === null || previous.price !== snapshot.price);
-  const currentOffers = JSON.parse(JSON.stringify(snapshot.offers)) as object;
+  const currentOffers = JSON.parse(JSON.stringify(effectiveOffers)) as object;
 
   // Deal-quality context (FR-5.5): all-time low/high maintained incrementally
   // from live prices only.
@@ -137,7 +149,7 @@ export async function recordCheck(
         mrp: snapshot.mrp,
         discountPct: snapshot.discountPct,
         offers: currentOffers,
-        offersHash: offersHash(snapshot.offers),
+        offersHash: offersHash(effectiveOffers),
         stockStatus: snapshot.stockStatus,
         extractionTier: outcome.tier,
         durationMs: outcome.durationMs,

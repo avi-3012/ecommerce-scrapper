@@ -52,6 +52,18 @@ describe('parseSecondaryViewOffers', () => {
       'Flat INR 8000 Instant Discount on HDFC Bank Credit Card',
     ]);
   });
+
+  it('does not double the text when Amazon ships the a-truncate ellipsis copy', () => {
+    const full = 'Upto ₹525.05 EMI interest savings on Amazon Pay ICICI Bank Credit Cards';
+    const html = `<div class="vsx-offers-desktop-lv__item">Offer 1
+      <span class="a-truncate">
+        <span class="a-truncate-full a-offscreen">${full}</span>
+        <span class="a-truncate-cut" aria-hidden="false">${full.slice(0, 50)}…</span>
+      </span>
+      <a href="#">See details</a>
+    </div>`;
+    expect(parseSecondaryViewOffers(html)).toEqual([full]);
+  });
 });
 
 describe('buildSecondaryViewUrl', () => {
