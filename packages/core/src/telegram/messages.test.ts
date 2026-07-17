@@ -83,6 +83,17 @@ describe('renderAlertMessage', () => {
     expect(msg).toContain('New offers:');
   });
 
+  it('embeds the listing link under a label instead of the raw URL', () => {
+    const vars = buildAlertVariables(sampleAlertInput('offer_change'));
+    expect(vars.link).toBe(
+      '<a href="https://www.flipkart.com/apple-iphone-16-black-128-gb/p/itmb07d67f995271">Open on Flipkart</a>',
+    );
+    const msg = renderAlertMessage(sampleAlertInput('offer_change'));
+    expect(msg).toContain('🔗 <a href="https://www.flipkart.com');
+    expect(msg).toContain('>Open on Flipkart</a>');
+    expect(msg).not.toContain('🔗 https://'); // no raw URL dump
+  });
+
   it('every alert type has a non-empty default template', () => {
     for (const [type, template] of Object.entries(DEFAULT_TEMPLATES)) {
       expect(template.length).toBeGreaterThan(0);

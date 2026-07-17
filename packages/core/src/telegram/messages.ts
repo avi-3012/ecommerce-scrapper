@@ -48,7 +48,7 @@ export const DEFAULT_TEMPLATES: Record<AlertType, string> = {
     'Now:     {{newPrice}}',
     'Target:  {{target}}',
     '',
-    '🔗 {{url}}',
+    '🔗 {{link}}',
     '⏰ {{time}}',
   ].join('\n'),
   threshold_drop: [
@@ -59,7 +59,7 @@ export const DEFAULT_TEMPLATES: Record<AlertType, string> = {
     'Now:     {{newPrice}}',
     'Change:  {{changeArrow}} {{changePct}}',
     '',
-    '🔗 {{url}}',
+    '🔗 {{link}}',
     '⏰ {{time}}',
   ].join('\n'),
   price_change: [
@@ -70,7 +70,7 @@ export const DEFAULT_TEMPLATES: Record<AlertType, string> = {
     'Now:     {{newPrice}}',
     'Change:  {{changeArrow}} {{changePct}}',
     '',
-    '🔗 {{url}}',
+    '🔗 {{link}}',
     '⏰ {{time}}',
   ].join('\n'),
   offer_change: [
@@ -85,7 +85,7 @@ export const DEFAULT_TEMPLATES: Record<AlertType, string> = {
     'New offers:',
     '{{newOffers}}',
     '',
-    '🔗 {{url}}',
+    '🔗 {{link}}',
     '⏰ {{time}}',
   ].join('\n'),
   back_in_stock: [
@@ -94,7 +94,7 @@ export const DEFAULT_TEMPLATES: Record<AlertType, string> = {
     '',
     'Now available at {{price}}',
     '',
-    '🔗 {{url}}',
+    '🔗 {{link}}',
     '⏰ {{time}}',
   ].join('\n'),
   auto_paused: [
@@ -104,7 +104,7 @@ export const DEFAULT_TEMPLATES: Record<AlertType, string> = {
     '{{failureReason}}.',
     'Paused after {{failureCount}} consecutive failed checks. Resume it once the listing looks right.',
     '',
-    '🔗 {{url}}',
+    '🔗 {{link}}',
     '⏰ {{time}}',
   ].join('\n'),
   system_health: [
@@ -127,7 +127,8 @@ const COMMON_VARS: TemplateVariable[] = [
   { name: 'typeLabel', description: 'Human label, e.g. “Price changed”' },
   { name: 'productName', description: 'Product display name' },
   { name: 'marketplace', description: 'Amazon India / Flipkart' },
-  { name: 'url', description: 'Direct listing link' },
+  { name: 'link', description: 'Tappable “Open on <marketplace>” link (hides the long URL)' },
+  { name: 'url', description: 'Raw listing URL (shows the full link text)' },
   { name: 'time', description: 'When the alert fired (your timezone)' },
 ];
 const PRICE_VARS: TemplateVariable[] = [
@@ -243,6 +244,9 @@ export function buildAlertVariables(
     productName: escapeHtml(input.productName),
     marketplace: MARKETPLACE_LABELS[input.marketplace],
     url: escapeHtml(input.listingUrl),
+    link: input.listingUrl
+      ? `<a href="${escapeHtml(input.listingUrl)}">Open on ${MARKETPLACE_LABELS[input.marketplace]}</a>`
+      : '',
     time: formatTime(input.firedAt, timezone),
     oldPrice: money(oldVal.price),
     newPrice: money(newVal.price),

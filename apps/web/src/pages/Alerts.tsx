@@ -149,7 +149,7 @@ export function AlertsPage(): JSX.Element {
                   </p>
                   {a.message ? (
                     <div
-                      className="whitespace-pre-wrap break-words text-sm leading-relaxed text-fg"
+                      className="whitespace-pre-wrap break-words text-sm leading-relaxed text-fg [&_a]:text-brand-subtle-fg [&_a]:underline"
                       dangerouslySetInnerHTML={{ __html: telegramHtmlToSafe(a.message) }}
                     />
                   ) : (

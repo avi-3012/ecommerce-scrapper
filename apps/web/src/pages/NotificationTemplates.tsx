@@ -174,7 +174,7 @@ function TemplateEditor({ tpl }: { tpl: NotificationTemplate }): JSX.Element {
           </p>
           <div className="rounded-xl bg-surface-2 p-3">
             <div
-              className="whitespace-pre-wrap break-words text-sm leading-relaxed text-fg"
+              className="whitespace-pre-wrap break-words text-sm leading-relaxed text-fg [&_a]:text-brand-subtle-fg [&_a]:underline"
               // Sample-data preview of the user's own template (self-hosted, single user).
               dangerouslySetInnerHTML={{
                 __html: telegramHtmlToSafe(preview.data?.message ?? 'Rendering…'),
