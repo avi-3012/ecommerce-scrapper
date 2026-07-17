@@ -1,6 +1,7 @@
 import type { Marketplace, OfferType, StockStatus } from './enums.js';
 
 /** A single normalized promotional offer on a listing. */
+/** A single, individual promotional offer on a listing. */
 export interface Offer {
   type: OfferType;
   description: string;

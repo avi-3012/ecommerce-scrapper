@@ -55,6 +55,49 @@ describe('amazon fixture suite (WP-1.2)', () => {
     expect(types).toContain('bank_offer');
   });
 
+  it('parses enriched individual offers injected by the adapter (classified by card)', () => {
+    const offers = JSON.stringify([
+      {
+        label: 'Bank Offer',
+        description: 'Flat INR 8000 Instant Discount on ICICI Bank Credit Card',
+      },
+      {
+        label: 'No Cost EMI',
+        description: 'Upto ₹5,855 EMI interest savings on select Credit Cards',
+      },
+      { label: 'Cashback', description: 'Upto ₹2,609 cashback with Amazon Pay' },
+    ]);
+    const html = `<!doctype html><html><body>
+      <span id="productTitle">vivo X300 FE</span>
+      <div id="availability"><span>In stock</span></div>
+      <div id="corePriceDisplay_desktop_feature_div"><span class="a-price priceToPay"><span class="a-offscreen">₹86,999</span></span></div>
+      <script type="application/json" id="pp-amazon-offers">${offers}</script>
+    </body></html>`;
+    const snap = parseAmazonPage(html, 'B0GX94B58L');
+    expect(snap.offers).toHaveLength(3);
+    const byDesc = Object.fromEntries(snap.offers.map((o) => [o.description, o.type]));
+    expect(byDesc['Flat INR 8000 Instant Discount on ICICI Bank Credit Card']).toBe('bank_offer');
+    expect(byDesc['Upto ₹5,855 EMI interest savings on select Credit Cards']).toBe('no_cost_emi');
+    expect(byDesc['Upto ₹2,609 cashback with Amazon Pay']).toBe('cashback');
+  });
+
+  it('fails as parse_failed when a multi-offer card is present but was not expanded (no toleration)', () => {
+    // Simulates the browser tier (or missing enrichment): the page shows a
+    // "3 offers" card but carries no injected individual offers — must fail
+    // rather than record summary-only data.
+    const html = `<!doctype html><html><body>
+      <span id="productTitle">vivo X300 FE</span>
+      <div id="availability"><span>In stock</span></div>
+      <div id="corePriceDisplay_desktop_feature_div"><span class="a-price priceToPay"><span class="a-offscreen">₹86,999</span></span></div>
+      <div class="offers-items"><h6 class="offers-items-title">Bank Offer</h6>
+        <div class="offers-items-content">Upto ₹8,000 discount</div>
+        <a class="vsx-offers-count">3 offers</a></div>
+    </body></html>`;
+    expect(() => parseAmazonPage(html, 'B0GX94B58L')).toThrowError(
+      expect.objectContaining({ reason: 'parse_failed' }),
+    );
+  });
+
   it('fixture: out-of-stock is a successful check with NULL price (no garbage price)', () => {
     const snap = parseAmazonPage(fixture('out-of-stock'), 'B09XS7JWHH');
     expect(snap.stockStatus).toBe('out_of_stock');

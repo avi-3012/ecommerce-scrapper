@@ -2,7 +2,8 @@ import * as cheerio from 'cheerio';
 import type { ProductSnapshot, StockStatus } from '@pricepulse/shared';
 import { computeDiscountPct } from '@pricepulse/shared';
 import { CheckError } from '../errors.js';
-import { normalizeOffers } from '../offers.js';
+import { normalizeOfferCards, type RawOffer } from '../offers.js';
+import { extractFlipkartOffers } from './offers.js';
 import { parseInrAmount } from '../money.js';
 import { validateSnapshot } from '../validate.js';
 
@@ -162,15 +163,25 @@ export function parseFlipkartPage(html: string, expected?: FlipkartExpectedIds):
     }
   }
 
-  // ── Offers: list items mentioning offer keywords ──
-  const offerTexts: string[] = [];
-  $('li').each((_i, el) => {
-    const text = $(el).text().trim();
-    if (/bank offer|special price|coupon|cashback|exchange|no cost emi/i.test(text)) {
-      offerTexts.push(text);
-    }
-  });
-  const offers = normalizeOffers(offerTexts);
+  // ── Offers ──
+  // Modern Flipkart pages are client-rendered and ship the individual offers in
+  // the embedded `__INITIAL_STATE__` JSON — parse those first. Older/simpler
+  // layouts server-render each offer as a list item, so fall back to a keyword
+  // scan of <li> text when the JSON carries none.
+  const rawOffers: RawOffer[] = extractFlipkartOffers(html);
+  if (rawOffers.length === 0) {
+    $('li').each((_i, el) => {
+      const text = $(el).text().trim();
+      if (
+        /bank offer|special price|coupon|cashback|exchange|no cost emi|instant discount|partner offer/i.test(
+          text,
+        )
+      ) {
+        rawOffers.push({ description: text });
+      }
+    });
+  }
+  const offers = normalizeOfferCards(rawOffers);
 
   if (!name) {
     throw new CheckError('parse_failed', 'Could not extract product name (all strategies)');

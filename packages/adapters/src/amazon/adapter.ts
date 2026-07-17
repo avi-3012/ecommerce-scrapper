@@ -4,6 +4,7 @@ import { httpFetch } from '../fetch/http.js';
 import type { FetchFn } from '../fetch/http.js';
 import { AMAZON_DOMAINS, extractAsin, recognizeAmazon } from './canonicalize.js';
 import { parseAmazonPage } from './parse.js';
+import { collectAmazonOffers, injectOffers } from './offers.js';
 
 export class AmazonAdapter implements MarketplaceAdapter {
   readonly marketplace: Marketplace = 'amazon_in';
@@ -15,8 +16,18 @@ export class AmazonAdapter implements MarketplaceAdapter {
     return recognizeAmazon(url);
   }
 
-  fetch(canonicalUrl: string): Promise<RawPage> {
-    return this.fetchFn(canonicalUrl);
+  async fetch(canonicalUrl: string): Promise<RawPage> {
+    const page = await this.fetchFn(canonicalUrl);
+    // Expand every multi-offer card into its individual offers via Amazon's
+    // side-sheet AJAX endpoint (cheap tier-1 calls, same proxy/session), and
+    // carry them into parse via an injected marker script. A layout change that
+    // blocks expansion throws parse_failed here — no summary-only fallback.
+    const asin = extractAsin(new URL(page.url)) ?? undefined;
+    if (asin) {
+      const offers = await collectAmazonOffers(page.body, asin, this.fetchFn);
+      if (offers) page.body = injectOffers(page.body, offers);
+    }
+    return page;
   }
 
   parse(page: RawPage): ProductSnapshot {

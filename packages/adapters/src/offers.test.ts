@@ -1,16 +1,44 @@
 import { describe, expect, it } from 'vitest';
-import { classifyOffer, diffOffers, normalizeOffers, offersHash } from './offers.js';
+import {
+  classifyOffer,
+  diffOffers,
+  normalizeOfferCards,
+  normalizeOffers,
+  offersHash,
+} from './offers.js';
 
 describe('offer classification', () => {
   it.each([
     ['10% Instant Discount on HDFC Bank Credit Card', 'bank_offer'],
     ['Flat ₹100 off coupon', 'coupon'],
-    ['5% Cashback on Flipkart Axis Bank Card', 'bank_offer'],
+    // Cashback wins over the generic "bank" token — it's the specific category.
+    ['5% Cashback on Flipkart Axis Bank Card', 'cashback'],
     ['Get ₹500 cashBack on first order', 'cashback'],
     ['Up to ₹20,000 off on exchange', 'exchange'],
+    ['No Cost EMI available on select cards', 'no_cost_emi'],
+    ['Upto ₹8,735.29 EMI interest savings on select Credit Cards', 'bank_offer'],
+    ['No Cost EMI Upto ₹8,735.29 EMI interest savings on select Credit Cards', 'no_cost_emi'],
+    ['Get GST invoice and save up to 18% on business purchases', 'partner'],
     ['Free delivery on orders above ₹499', 'other'],
   ])('"%s" → %s', (text, expected) => {
     expect(classifyOffer(text)).toBe(expected);
+  });
+});
+
+describe('normalizeOfferCards (label-hinted classification)', () => {
+  it('classifies by the category label hint, not just the description text', () => {
+    const offers = normalizeOfferCards([
+      {
+        label: 'No Cost EMI',
+        description: 'Upto ₹8,735.29 EMI interest savings on select Credit Cards',
+      },
+      {
+        label: 'Cashback',
+        description: 'Upto ₹2,609.00 cashback with Amazon Pay ICICI Bank Credit Cards',
+      },
+      { label: 'Bank Offer', description: 'Upto ₹8,000.00 discount on select Credit Cards' },
+    ]);
+    expect(offers.map((o) => o.type).sort()).toEqual(['bank_offer', 'cashback', 'no_cost_emi']);
   });
 });
 

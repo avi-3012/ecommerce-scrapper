@@ -5,6 +5,8 @@ import { scraperProxyUrl } from './proxy.js';
 
 export interface HttpFetchOptions {
   timeoutMs?: number;
+  /** Extra request headers, merged over the generated browser headers (e.g. XHR headers for AJAX endpoints). */
+  headers?: Record<string, string>;
 }
 
 export type FetchFn = (url: string, options?: HttpFetchOptions) => Promise<RawPage>;
@@ -28,6 +30,7 @@ export const httpFetch: FetchFn = async (url, options = {}) => {
       // proxies can't tunnel HTTP/2, which surfaces as "Protocol error" — so
       // force HTTP/1.1 whenever a proxy is in the path.
       ...(proxyUrl ? { proxyUrl, http2: false } : {}),
+      ...(options.headers ? { headers: options.headers } : {}),
       headerGeneratorOptions: {
         devices: ['desktop'],
         locales: ['en-IN', 'en-US'],

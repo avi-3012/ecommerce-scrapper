@@ -2,7 +2,8 @@ import * as cheerio from 'cheerio';
 import type { ProductSnapshot, StockStatus } from '@pricepulse/shared';
 import { computeDiscountPct } from '@pricepulse/shared';
 import { CheckError } from '../errors.js';
-import { normalizeOffers } from '../offers.js';
+import { normalizeOfferCards } from '../offers.js';
+import { domOffers, hasUnexpandedMultiOfferCard, readInjectedOffers } from './offers.js';
 import { parseInrAmount } from '../money.js';
 import { validateSnapshot } from '../validate.js';
 
@@ -119,17 +120,22 @@ export function parseAmazonPage(html: string, expectedAsin?: string): ProductSna
     }
   }
 
-  // ── Offers (coupon badge, bank/promo strips) ──
-  const offerTexts: string[] = [];
-  $('#couponBadgeRegularVsn, .couponBadge, [id^="couponText"]').each((_i, el) => {
-    offerTexts.push($(el).text());
-  });
-  $(
-    '#vsxoffers_feature_div .vsx-offers-desktop-lv__item, #itembox-InstantBankDiscount, .offers-items-content',
-  ).each((_i, el) => {
-    offerTexts.push($(el).text());
-  });
-  const offers = normalizeOffers(offerTexts);
+  // ── Offers ──
+  // Individual offers are collected during fetch (the adapter expands each
+  // multi-offer card via Amazon's side-sheet AJAX endpoint) and injected into
+  // the page as a marker script. When present, those are the authoritative,
+  // fully-expanded offers. Otherwise fall back to what the DOM itself carries
+  // (single-offer cards, older flat layouts, coupon badge) — but never accept a
+  // page that shows a multi-offer card we failed to expand (no toleration of
+  // layout drift): that fails the check as parse_failed above, in the adapter.
+  const injected = readInjectedOffers($);
+  if (injected === null && hasUnexpandedMultiOfferCard(html)) {
+    throw new CheckError(
+      'parse_failed',
+      'Amazon shows multi-offer cards whose individual offers were not expanded',
+    );
+  }
+  const offers = normalizeOfferCards(injected ?? domOffers($));
 
   // ── Image ──
   const imageUrl = $('#landingImage').attr('src') ?? $('#imgTagWrapperId img').attr('src') ?? null;

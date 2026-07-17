@@ -66,5 +66,24 @@ export type ExtractionTier = (typeof EXTRACTION_TIERS)[number];
 export const PRIORITY_TIERS = ['normal', 'high'] as const;
 export type PriorityTier = (typeof PRIORITY_TIERS)[number];
 
-export const OFFER_TYPES = ['bank_offer', 'coupon', 'cashback', 'exchange', 'other'] as const;
+export const OFFER_TYPES = [
+  'bank_offer',
+  'no_cost_emi',
+  'cashback',
+  'coupon',
+  'exchange',
+  'partner',
+  'other',
+] as const;
 export type OfferType = (typeof OFFER_TYPES)[number];
+
+/** User-facing label for each offer category (shown as a tag in the UI). */
+export const OFFER_TYPE_LABELS: Record<OfferType, string> = {
+  bank_offer: 'Bank Offer',
+  no_cost_emi: 'No Cost EMI',
+  cashback: 'Cashback',
+  coupon: 'Coupon',
+  exchange: 'Exchange',
+  partner: 'Partner Offer',
+  other: 'Offer',
+};

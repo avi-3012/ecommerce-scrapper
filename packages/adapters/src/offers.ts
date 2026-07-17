@@ -10,14 +10,37 @@ import type { Offer, OfferType } from '@pricepulse/shared';
  *  - a changed amount or wording inside an offer MUST change the hash.
  */
 
+// Both marketplaces tag an offer with its category up front: Amazon's card
+// title ("Bank Offer", "No Cost EMI") and Flipkart's list-item prefix
+// ("Bank Offer: 5% Cashback …"). That leading label is authoritative — a
+// "Bank Offer" that happens to be a cashback is still filed under Bank Offer —
+// so it is matched first, before the keyword fallback.
+const LABEL_PREFIX: Array<[OfferType, RegExp]> = [
+  ['no_cost_emi', /^\s*no[\s-]?cost\s*emi\b/i],
+  ['bank_offer', /^\s*bank offer\b/i],
+  ['cashback', /^\s*cash\s?back\b/i],
+  ['coupon', /^\s*coupon\b/i],
+  ['partner', /^\s*partner offers?\b/i],
+  ['exchange', /^\s*exchange( offer)?\b/i],
+];
+
+// Keyword fallback for un-prefixed text. Order matters: the more specific
+// categories are tested first, because their text also contains generic
+// "bank"/"credit card"/"emi" tokens. A cashback offer or a No Cost EMI offer
+// would otherwise be misfiled as a plain bank offer.
 const CLASSIFICATION: Array<[OfferType, RegExp]> = [
-  ['bank_offer', /\b(bank|credit card|debit card|emi|instant discount|upi)\b/i],
-  ['coupon', /\bcoupon\b/i],
+  ['no_cost_emi', /\bno[\s-]?cost\s*emi\b/i],
   ['cashback', /\bcash\s?back\b/i],
   ['exchange', /\bexchange\b/i],
+  ['coupon', /\bcoupon\b/i],
+  ['partner', /\b(partner offer|gst invoice|business purchase|gst)\b/i],
+  ['bank_offer', /\b(bank|credit card|debit card|emi|instant discount|upi)\b/i],
 ];
 
 export function classifyOffer(text: string): OfferType {
+  for (const [type, pattern] of LABEL_PREFIX) {
+    if (pattern.test(text)) return type;
+  }
   for (const [type, pattern] of CLASSIFICATION) {
     if (pattern.test(text)) return type;
   }
@@ -34,15 +57,35 @@ function comparisonForm(text: string): string {
 }
 
 export function normalizeOffers(rawTexts: string[]): Offer[] {
+  return normalizeOfferCards(rawTexts.map((description) => ({ description })));
+}
+
+/**
+ * A raw offer entry captured from the page, before normalization. `label` is an
+ * optional category hint — e.g. an Amazon offer-card title ("Bank Offer", "No
+ * Cost EMI") — which classifies more reliably than the free-text description
+ * (whose "EMI"/"Credit Cards" tokens are ambiguous).
+ */
+export interface RawOffer {
+  description: string;
+  label?: string;
+}
+
+export function normalizeOfferCards(raw: RawOffer[]): Offer[] {
   const seen = new Set<string>();
   const offers: Offer[] = [];
-  for (const raw of rawTexts) {
-    const description = raw.replace(/\s+/g, ' ').trim();
+  for (const entry of raw) {
+    const description = entry.description.replace(/\s+/g, ' ').trim();
     if (!description) continue;
     const key = comparisonForm(description);
     if (seen.has(key)) continue; // dedupe within a page
     seen.add(key);
-    offers.push({ type: classifyOffer(description), description });
+    offers.push({
+      // Prefer the category hint (card title) when present; fall back to
+      // classifying the description text itself.
+      type: classifyOffer(entry.label ? `${entry.label} ${description}` : description),
+      description,
+    });
   }
   // Deterministic order so the hash is order-independent
   return offers.sort((a, b) =>
@@ -53,7 +96,9 @@ export function normalizeOffers(rawTexts: string[]): Offer[] {
 /** Stable hash over the normalized offer set — the FR-3.4 change-detection primitive. */
 export function offersHash(offers: Offer[]): string {
   const canonical = offers
-    .map((o) => comparisonForm(o.description))
+    // Include the type so a re-categorized offer (same wording, different
+    // category) is still detected as a change.
+    .map((o) => `${o.type}|${comparisonForm(o.description)}`)
     .sort()
     .join('\n');
   return createHash('sha256').update(canonical).digest('hex');
