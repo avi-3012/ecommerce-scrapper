@@ -51,6 +51,7 @@ function SettingsForm({
   const [interval, setIntervalMin] = useState(String(settings.checkIntervalMinutes));
   const [threshold, setThreshold] = useState(String(settings.globalDropThresholdPct));
   const [failureLimit, setFailureLimit] = useState(String(settings.consecutiveFailureLimit));
+  const [pincode, setPincode] = useState(settings.pincode ?? '');
   const [toggles, setToggles] = useState({
     alertTargetPrice: settings.alertTargetPrice,
     alertThresholdDrop: settings.alertThresholdDrop,
@@ -149,6 +150,18 @@ function SettingsForm({
               onChange={(e) => setFailureLimit(e.target.value)}
             />
           </Field>
+          <Field
+            label="Delivery pincode (optional)"
+            hint="Localises Amazon prices/offers to this area. Leave blank for the default."
+          >
+            <Input
+              inputMode="numeric"
+              maxLength={6}
+              placeholder="e.g. 560001"
+              value={pincode}
+              onChange={(e) => setPincode(e.target.value.replace(/\D/g, ''))}
+            />
+          </Field>
         </div>
         <div className="mt-3 flex justify-end">
           <Button
@@ -159,6 +172,7 @@ function SettingsForm({
                 checkIntervalMinutes: Number(interval),
                 globalDropThresholdPct: Number(threshold),
                 consecutiveFailureLimit: Number(failureLimit),
+                pincode: pincode.trim() === '' ? null : pincode.trim(),
               })
             }
           >

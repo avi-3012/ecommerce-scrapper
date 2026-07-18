@@ -51,6 +51,12 @@ const patchSchema = z.object({
     .nullable()
     .optional(),
   nearLowThresholdPct: z.number().min(0).max(50).optional(),
+  /** 6-digit India delivery pincode for location-aware scraping; null clears it. */
+  pincode: z
+    .string()
+    .regex(/^\d{6}$/, 'Enter a valid 6-digit pincode')
+    .nullable()
+    .optional(),
 });
 
 /**

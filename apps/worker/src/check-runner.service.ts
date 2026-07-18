@@ -39,6 +39,7 @@ export class CheckRunnerService implements OnModuleInit {
     }
     const outcome = await performCheck(adapter, product.canonicalUrl, {
       browserFetch: this.browserFetch,
+      pincode: settings.pincode,
     });
     const result = await recordCheck(this.prisma, product, outcome, settings);
     // Live-update event (WP-3.6): fire-and-forget; the stream is never load-bearing.

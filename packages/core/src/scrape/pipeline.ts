@@ -14,6 +14,8 @@ export interface PipelineOptions {
    * (H-13 documents enabling Playwright where the worker runs).
    */
   browserFetch?: FetchFn;
+  /** Delivery pincode for location-aware scraping (threaded from settings). */
+  pincode?: string | null;
 }
 
 /** Tier-1 outcomes that justify a browser retry (WP-1.4 escalation policy). */
@@ -31,7 +33,7 @@ export async function performCheck(
 ): Promise<CheckOutcome> {
   const started = Date.now();
 
-  const tier1 = await attempt(() => fetchAndParse(adapter, canonicalUrl));
+  const tier1 = await attempt(() => fetchAndParse(adapter, canonicalUrl, options.pincode));
   if (tier1.ok) {
     return { ok: true, snapshot: tier1.value, tier: 'http', durationMs: Date.now() - started };
   }
@@ -53,8 +55,9 @@ export async function performCheck(
 async function fetchAndParse(
   adapter: MarketplaceAdapter,
   canonicalUrl: string,
+  pincode?: string | null,
 ): Promise<ProductSnapshot> {
-  const page = await adapter.fetch(canonicalUrl);
+  const page = await adapter.fetch(canonicalUrl, { pincode });
   return adapter.parse(page);
 }
 

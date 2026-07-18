@@ -185,6 +185,7 @@ export interface SettingsView {
   digestFrequency: 'off' | 'daily' | 'weekly';
   digestTime: string | null;
   nearLowThresholdPct: string;
+  pincode: string | null;
 }
 
 export interface PreviewSnapshot {

@@ -1,5 +1,11 @@
 import type { ExtractionTier, Marketplace, ProductSnapshot } from '@pricepulse/shared';
 
+/** Per-check fetch options threaded from user settings. */
+export interface FetchOptions {
+  /** Delivery pincode for location-aware scraping (Amazon localises by it). */
+  pincode?: string | null;
+}
+
 /** A fetched listing page before parsing. */
 export interface RawPage {
   url: string;
@@ -35,7 +41,7 @@ export interface MarketplaceAdapter {
   recognize(url: URL): Exclude<UrlRecognition, { kind: 'unsupported' }>;
 
   /** Fetch the listing page (tier-1 HTTP; tier-2 escalation handled by the pipeline). */
-  fetch(canonicalUrl: string): Promise<RawPage>;
+  fetch(canonicalUrl: string, opts?: FetchOptions): Promise<RawPage>;
 
   /** Parse a fetched page into the normalized snapshot; throws a categorised error on failure. */
   parse(page: RawPage): ProductSnapshot;

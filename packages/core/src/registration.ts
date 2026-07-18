@@ -78,7 +78,7 @@ export async function previewUrl(deps: RegistrationDeps, input: string): Promise
     return { kind: 'not_a_listing', marketplace: recognition.marketplace };
   }
 
-  const { user } = await getUserWithSettings(prisma);
+  const { user, settings } = await getUserWithSettings(prisma);
   const existing = await prisma.product.findUnique({
     where: { userId_canonicalUrl: { userId: user.id, canonicalUrl: recognition.canonicalUrl } },
   });
@@ -94,6 +94,7 @@ export async function previewUrl(deps: RegistrationDeps, input: string): Promise
   const adapter = registry.all().find((a) => a.marketplace === recognition.marketplace)!;
   const outcome = await performCheck(adapter, recognition.canonicalUrl, {
     browserFetch: deps.browserFetch,
+    pincode: settings.pincode,
   });
   if (!outcome.ok) {
     return { kind: 'fetch_failed', reason: outcome.error.reason, message: outcome.error.message };

@@ -156,10 +156,12 @@ export async function collectAmazonOffers(
   html: string,
   asin: string,
   fetchFn: FetchFn,
+  cookie?: string,
 ): Promise<RawOffer[] | null> {
   const $ = cheerio.load(html);
   const cards = extractOfferCards($);
   if (cards.length === 0) return null;
+  const headers = cookie ? { ...offerHeaders(asin), cookie } : offerHeaders(asin);
 
   const perCard = await Promise.all(
     cards.map(async (card): Promise<RawOffer[]> => {
@@ -175,7 +177,7 @@ export async function collectAmazonOffers(
         );
       }
       const url = buildSecondaryViewUrl(asin, card.config);
-      const page = await fetchFn(url, { timeoutMs: 15_000, headers: offerHeaders(asin) });
+      const page = await fetchFn(url, { timeoutMs: 15_000, headers });
       const items = parseSecondaryViewOffers(page.body);
       if (items.length === 0) {
         throw new CheckError(

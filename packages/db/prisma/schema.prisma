@@ -275,6 +275,10 @@ model Settings {
 
   timezone String @default("Asia/Kolkata")
 
+  // Delivery pincode for location-aware scraping (Amazon localises price/offers
+  // by delivery location). Null = no location set (marketplace default).
+  pincode String? @db.VarChar(6)
+
   // User-customised Telegram message templates, keyed by alert type
   // ({ [alertType]: templateString }). Missing keys fall back to the built-in
   // default template. Fully user-editable (notification template editor).
