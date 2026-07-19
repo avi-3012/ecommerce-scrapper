@@ -108,12 +108,20 @@ export function parseAmazonPage(html: string, expectedAsin?: string): ProductSna
   }
 
   // ── MRP (strikethrough list price) — only meaningful alongside a live price ──
+  // The list price must be >= the selling price; some pages carry unrelated
+  // strikethrough amounts (e.g. a ₹69.90 add-on/EMI figure), so scan the
+  // candidates and take the first one that is actually >= the price rather than
+  // blindly the first match.
   let mrp: number | null = null;
   if (price !== null) {
-    mrp = parseInrAmount(
-      $('.basisPrice .a-offscreen, .a-price.a-text-price .a-offscreen').first().text(),
-    );
-    if (mrp !== null) provenance.mrp = 'basis-price';
+    $('.basisPrice .a-offscreen, .a-price.a-text-price .a-offscreen').each((_i, el) => {
+      if (mrp !== null) return;
+      const value = parseInrAmount($(el).text());
+      if (value !== null && value >= price) {
+        mrp = value;
+        provenance.mrp = 'basis-price';
+      }
+    });
     if (mrp === null) {
       mrp = price;
       provenance.mrp = 'equal-to-price';

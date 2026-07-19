@@ -98,6 +98,24 @@ describe('amazon fixture suite (WP-1.2)', () => {
     );
   });
 
+  it('ignores a bogus low strikethrough and picks the real MRP (>= selling price)', () => {
+    // Regression (B0FN7QTRPY): the page carried a ₹69.90 strikethrough before
+    // the real ₹12,999 list price, which made validation reject the snapshot
+    // ("selling price 10999 exceeds MRP 69.9").
+    const html = `<!doctype html><html><body>
+      <span id="productTitle">Samsung Galaxy M07</span>
+      <div id="availability"><span>In stock</span></div>
+      <div id="corePriceDisplay_desktop_feature_div">
+        <span class="a-price priceToPay"><span class="a-offscreen">₹10,999</span></span>
+        <span class="a-price a-text-price"><span class="a-offscreen">₹69.90</span></span>
+        <span class="a-price a-text-price"><span class="a-offscreen">₹12,999</span></span>
+      </div>
+    </body></html>`;
+    const snap = parseAmazonPage(html, 'B0FN7QTRPY');
+    expect(snap.price).toBe(10999);
+    expect(snap.mrp).toBe(12999);
+  });
+
   it('fixture: out-of-stock is a successful check with NULL price (no garbage price)', () => {
     const snap = parseAmazonPage(fixture('out-of-stock'), 'B09XS7JWHH');
     expect(snap.stockStatus).toBe('out_of_stock');
