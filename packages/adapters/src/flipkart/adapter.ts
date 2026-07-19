@@ -1,5 +1,6 @@
 import type { Marketplace, ProductSnapshot } from '@pricepulse/shared';
 import type { FetchOptions, MarketplaceAdapter, RawPage, UrlRecognition } from '../adapter.js';
+import { CheckError } from '../errors.js';
 import { httpFetch } from '../fetch/http.js';
 import type { FetchFn } from '../fetch/http.js';
 import { FLIPKART_DOMAINS, extractFlipkartIds, recognizeFlipkart } from './canonicalize.js';
@@ -24,7 +25,14 @@ export class FlipkartAdapter implements MarketplaceAdapter {
     if (opts?.pincode) {
       const url = new URL(canonicalUrl);
       const pricing = await fetchFlipkartPincodePricing(url.pathname + url.search, opts.pincode);
-      if (pricing) page.body = injectPincodePricing(page.body, pricing);
+      if (!pricing) {
+        // A pincode is configured but its localized price couldn't be fetched.
+        // Do NOT fall back to the IP-default price: the proxy IP's region varies
+        // between checks, so that records a wrong price and fires a false drop.
+        // Fail the check transiently — the last known price is preserved.
+        throw new CheckError('other', `Flipkart pincode ${opts.pincode} pricing unavailable`);
+      }
+      page.body = injectPincodePricing(page.body, pricing);
     }
     return page;
   }
