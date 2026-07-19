@@ -4,6 +4,7 @@ import { computeDiscountPct } from '@pricepulse/shared';
 import { CheckError } from '../errors.js';
 import { normalizeOfferCards, type RawOffer } from '../offers.js';
 import { extractFlipkartOffers } from './offers.js';
+import { FLIPKART_PINCODE_MARKER, type PincodePricing } from './location.js';
 import { parseInrAmount } from '../money.js';
 import { validateSnapshot } from '../validate.js';
 
@@ -160,6 +161,28 @@ export function parseFlipkartPage(html: string, expected?: FlipkartExpectedIds):
     if (mrp === null) {
       mrp = price;
       provenance.mrp = 'equal-to-price';
+    }
+  }
+
+  // ── Pincode-localised price/MRP/stock override (injected by the adapter from
+  // Flipkart's page/fetch API). Takes precedence over the IP-default HTML. ──
+  const pincodeEl = $(`#${FLIPKART_PINCODE_MARKER}`);
+  if (pincodeEl.length) {
+    try {
+      const loc = JSON.parse(pincodeEl.first().text()) as PincodePricing;
+      if (loc.stockStatus === 'out_of_stock') {
+        price = null;
+        mrp = null;
+        stockStatus = 'out_of_stock';
+      } else {
+        price = loc.price;
+        mrp = loc.mrp;
+        stockStatus = 'in_stock';
+      }
+      provenance.price = 'pincode-api';
+      provenance.pincode = loc.pincode;
+    } catch {
+      // Malformed marker — keep the HTML-derived values.
     }
   }
 

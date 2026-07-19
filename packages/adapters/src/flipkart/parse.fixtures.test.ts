@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { parseFlipkartPage } from './parse.js';
+import { injectPincodePricing } from './location.js';
 
 function fixture(name: string): string {
   return readFileSync(
@@ -21,6 +22,20 @@ describe('flipkart fixture suite (WP-1.3)', () => {
     const types = snap.offers.map((o) => o.type);
     expect(types).toContain('bank_offer');
     expect(snap.marketplaceProductId).toBe('MOBGXKZ4GFWZHQCE');
+  });
+
+  it('applies an injected pincode price override (location-aware pricing)', () => {
+    const html = injectPincodePricing(fixture('jsonld-in-stock'), {
+      price: 37999,
+      mrp: 45999,
+      stockStatus: 'in_stock',
+      pincode: '400001',
+    });
+    const snap = parseFlipkartPage(html, { pid: 'MOBGXKZ4GFWZHQCE' });
+    expect(snap.price).toBe(37999);
+    expect(snap.mrp).toBe(45999);
+    expect(snap.provenance.price).toBe('pincode-api');
+    expect(snap.provenance.pincode).toBe('400001');
   });
 
   it('fixture: Coming Soon / Notify Me maps to out_of_stock (FR-2.7)', () => {
