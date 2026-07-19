@@ -120,7 +120,7 @@ export function parseSecondaryViewOffers(html: string): string[] {
       .replace(/\s+/g, ' ')
       .trim()
       .replace(/^Offer\s+\d+\s*/i, '')
-      .replace(/\s+\.\s*$/, '.')
+      .replace(/[\s.]+$/, '') // strip dangling trailing dots/space (varies per fetch)
       .trim();
     if (text) offers.push(text);
   });

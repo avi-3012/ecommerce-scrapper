@@ -49,11 +49,17 @@ export function classifyOffer(text: string): OfferType {
 
 /** Collapse whitespace, strip decorative punctuation, lowercase — the comparison form. */
 function comparisonForm(text: string): string {
-  return text
-    .toLowerCase()
-    .replace(/[|•·*_]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+  return (
+    text
+      .toLowerCase()
+      .replace(/[|•·*_]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      // Ignore trailing dots/spaces: Amazon intermittently appends a stray
+      // "Check eligibility here." element, so the same offer flaps between
+      // "…Amazon Pay Later.", "…Amazon Pay Later..", "…Amazon Pay Later . .".
+      .replace(/[\s.]+$/, '')
+      .trim()
+  );
 }
 
 export function normalizeOffers(rawTexts: string[]): Offer[] {

@@ -74,6 +74,18 @@ describe('offersHash stability rules (FR-3.4 primitive)', () => {
   it('dedupes repeated offers within a page', () => {
     expect(normalizeOffers([offerA, offerA, ` ${offerA} `])).toHaveLength(1);
   });
+
+  it('ignores trailing-dot flaps (Amazon "…Pay Later.." vs "…Pay Later . .")', () => {
+    const a = 'No Cost EMI available on Amazon Pay Later..';
+    const b = 'No Cost EMI available on Amazon Pay Later . .';
+    const c = 'No Cost EMI available on Amazon Pay Later';
+    expect(offersHash(normalizeOffers([a]))).toBe(offersHash(normalizeOffers([b])));
+    expect(offersHash(normalizeOffers([a]))).toBe(offersHash(normalizeOffers([c])));
+    expect(diffOffers(normalizeOffers([a]), normalizeOffers([b]))).toEqual({
+      added: [],
+      removed: [],
+    });
+  });
 });
 
 describe('diffOffers (FR-3.4 alert payload)', () => {

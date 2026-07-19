@@ -75,37 +75,46 @@ export function extractApiPricing(json: string): Omit<PincodePricing, 'pincode'>
   return { price: best.price, mrp: best.mrp, stockStatus: stock };
 }
 
-/** Fetch localized price/MRP/stock for a pincode via Flipkart's page/fetch API. */
+/**
+ * Fetch localized price/MRP/stock for a pincode via Flipkart's page/fetch API.
+ * Retries a few times: a transient failure here would otherwise let the parser
+ * fall back to the IP-default price, and since the proxy IP's region varies
+ * between checks that produces flapping price-change alerts.
+ */
 export async function fetchFlipkartPincodePricing(
   pageUri: string,
   pincode: string,
 ): Promise<PincodePricing | null> {
   const proxyUrl = scraperProxyUrl();
-  try {
-    const res = await gotScraping({
-      url: 'https://1.rome.api.flipkart.com/api/4/page/fetch?cacheFirst=false',
-      method: 'POST',
-      timeout: { request: 25_000 },
-      throwHttpErrors: false,
-      ...(proxyUrl ? { proxyUrl, http2: false } : {}),
-      headers: {
-        'content-type': 'application/json',
-        origin: 'https://www.flipkart.com',
-        referer: `https://www.flipkart.com${pageUri}`,
-        'x-user-agent': `${UA} FKUA/website/42/website/Desktop`,
-      },
-      body: JSON.stringify({
-        pageUri,
-        pageContext: { trackingContext: {} },
-        locationContext: { pincode: Number(pincode), changed: true },
-      }),
-    });
-    if (res.statusCode !== 200) return null;
-    const pricing = extractApiPricing(res.body);
-    return pricing ? { ...pricing, pincode } : null;
-  } catch {
-    return null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const res = await gotScraping({
+        url: 'https://1.rome.api.flipkart.com/api/4/page/fetch?cacheFirst=false',
+        method: 'POST',
+        timeout: { request: 25_000 },
+        throwHttpErrors: false,
+        ...(proxyUrl ? { proxyUrl, http2: false } : {}),
+        headers: {
+          'content-type': 'application/json',
+          origin: 'https://www.flipkart.com',
+          referer: `https://www.flipkart.com${pageUri}`,
+          'x-user-agent': `${UA} FKUA/website/42/website/Desktop`,
+        },
+        body: JSON.stringify({
+          pageUri,
+          pageContext: { trackingContext: {} },
+          locationContext: { pincode: Number(pincode), changed: true },
+        }),
+      });
+      if (res.statusCode === 200) {
+        const pricing = extractApiPricing(res.body);
+        if (pricing) return { ...pricing, pincode };
+      }
+    } catch {
+      // retry
+    }
   }
+  return null;
 }
 
 export function injectPincodePricing(html: string, pricing: PincodePricing): string {
