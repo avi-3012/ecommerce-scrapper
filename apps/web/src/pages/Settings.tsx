@@ -52,6 +52,7 @@ function SettingsForm({
   const [threshold, setThreshold] = useState(String(settings.globalDropThresholdPct));
   const [failureLimit, setFailureLimit] = useState(String(settings.consecutiveFailureLimit));
   const [pincode, setPincode] = useState(settings.pincode ?? '');
+  const [dailyCheckTime, setDailyCheckTime] = useState(settings.dailyCheckTime ?? '');
   const [toggles, setToggles] = useState({
     alertTargetPrice: settings.alertTargetPrice,
     alertThresholdDrop: settings.alertThresholdDrop,
@@ -162,6 +163,16 @@ function SettingsForm({
               onChange={(e) => setPincode(e.target.value.replace(/\D/g, ''))}
             />
           </Field>
+          <Field
+            label="Daily full-check time (optional)"
+            hint="Once a day at this time, every product is checked fast-paced (shortest interval first). Blank disables it."
+          >
+            <Input
+              type="time"
+              value={dailyCheckTime}
+              onChange={(e) => setDailyCheckTime(e.target.value)}
+            />
+          </Field>
         </div>
         <div className="mt-3 flex justify-end">
           <Button
@@ -173,6 +184,7 @@ function SettingsForm({
                 globalDropThresholdPct: Number(threshold),
                 consecutiveFailureLimit: Number(failureLimit),
                 pincode: pincode.trim() === '' ? null : pincode.trim(),
+                dailyCheckTime: dailyCheckTime.trim() === '' ? null : dailyCheckTime.trim(),
               })
             }
           >

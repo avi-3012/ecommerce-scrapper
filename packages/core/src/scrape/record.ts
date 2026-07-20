@@ -29,7 +29,11 @@ export async function recordCheck(
   settings: Settings,
   now: Date = new Date(),
 ): Promise<RecordedCheck> {
-  const nextCheckAt = computeNextCheck(settings.checkIntervalMinutes, now);
+  // Per-product interval overrides the global default when set.
+  const nextCheckAt = computeNextCheck(
+    product.checkIntervalMinutes ?? settings.checkIntervalMinutes,
+    now,
+  );
 
   if (!outcome.ok) {
     const failures = product.consecutiveFailures + 1;
@@ -158,8 +162,10 @@ export async function recordCheck(
     prisma.product.update({
       where: { id: product.id },
       data: {
-        displayName: product.displayName || snapshot.name,
-        imageUrl: product.imageUrl ?? snapshot.imageUrl,
+        // Display name always tracks the marketplace title (never user-provided);
+        // fall back to the existing name only if this check returned no title.
+        displayName: snapshot.name || product.displayName,
+        imageUrl: snapshot.imageUrl ?? product.imageUrl,
         // Preserve the last known price/MRP/discount when this check has no
         // live price (out of stock); only the stock status changes.
         ...(hasLivePrice

@@ -150,6 +150,8 @@ model Product {
   consecutiveFailures  Int           @default(0) @map("consecutive_failures")
   linkedProductId      String?       @unique @map("linked_product_id") @db.Uuid
   categoryId           String?       @map("category_id") @db.Uuid
+  // Per-product check cadence; null = use the global settings interval.
+  checkIntervalMinutes Int?          @map("check_interval_minutes")
 
   // Current-state snapshot, denormalised for the catalogue view (FR-5.2)
   currentPrice       Decimal?    @map("current_price") @db.Decimal(12, 2)
@@ -279,6 +281,10 @@ model Settings {
   // by delivery location). Null = no location set (marketplace default).
   pincode String? @db.VarChar(6)
 
+  // Optional daily "sweep" time (HH:MM, local): at this time every product is
+  // checked fast-paced, ordered by shortest check interval first. Null = off.
+  dailyCheckTime String? @map("daily_check_time")
+
   // User-customised Telegram message templates, keyed by alert type
   // ({ [alertType]: templateString }). Missing keys fall back to the built-in
   // default template. Fully user-editable (notification template editor).
@@ -326,6 +332,7 @@ model SystemStatus {
   successRate7d      Decimal?  @map("success_rate_7d") @db.Decimal(5, 2)
   scraperHealth      Json      @default("{}") @map("scraper_health")
   lastDigestAt       DateTime? @map("last_digest_at") @db.Timestamptz(6)
+  lastDailySweepAt   DateTime? @map("last_daily_sweep_at") @db.Timestamptz(6)
   updatedAt          DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   @@map("system_status")

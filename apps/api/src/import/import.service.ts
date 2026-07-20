@@ -61,7 +61,6 @@ async function mapWithConcurrency<T, R>(
 export interface ImportRow {
   rowNumber: number;
   url: string;
-  name?: string;
   targetPrice?: number;
   dropThresholdPct?: number;
   notes?: string;
@@ -87,8 +86,6 @@ const HEADER_MAP: Record<string, keyof Omit<ImportRow, 'rowNumber'>> = {
   url: 'url',
   link: 'url',
   'product url': 'url',
-  name: 'name',
-  title: 'name',
   'target price': 'targetPrice',
   target_price: 'targetPrice',
   target: 'targetPrice',
@@ -236,7 +233,8 @@ export class ImportService {
             url: row.url,
             canonicalUrl: row.canonicalUrl,
             marketplaceProductId: row.marketplaceProductId,
-            displayName: row.name?.trim() || `Awaiting first check — ${row.marketplaceProductId}`,
+            // Name is fetched from the marketplace on the first check; placeholder until then.
+            displayName: `Awaiting first check — ${row.marketplaceProductId}`,
             targetPrice: row.targetPrice ?? null,
             dropThresholdPct: row.dropThresholdPct ?? null,
             notes: row.notes ?? '',
@@ -323,7 +321,6 @@ export class ImportService {
       const field = HEADER_MAP[header.toLowerCase().trim()];
       if (!field || !value) continue;
       if (field === 'url') row.url = value;
-      else if (field === 'name') row.name = value;
       else if (field === 'notes') row.notes = value;
       else if (field === 'tags')
         row.tags = value

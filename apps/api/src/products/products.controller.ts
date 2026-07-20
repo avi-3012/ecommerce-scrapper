@@ -52,6 +52,14 @@ const configurableFields = {
   notes: z.string().max(5000).optional(),
   tags: z.array(z.string().min(1).max(50)).max(20).optional(),
   categoryId: z.string().uuid().nullable().optional(),
+  // Per-product check interval; null clears it (falls back to the global default).
+  checkIntervalMinutes: z
+    .number()
+    .int()
+    .min(10)
+    .max(24 * 60)
+    .nullable()
+    .optional(),
 };
 
 const registerSchema = z.object({

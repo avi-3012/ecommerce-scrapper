@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  ExternalLink,
   Flame,
   FolderCog,
   LayoutGrid,
@@ -12,8 +13,11 @@ import {
   Play,
   Plus,
   RefreshCw,
+  Target,
+  Timer,
   Trash2,
 } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import { api, errorMessage, inr, isNearLow, relTime } from '../api.js';
 import type { Category, Paged, Product } from '../api.js';
 import { useToast } from '../toast.js';
@@ -39,10 +43,17 @@ export function ProductsPage(): JSX.Element {
   const [params, setParams] = useSearchParams();
   const [deleting, setDeleting] = useState<Product | null>(null);
   const [manageCategories, setManageCategories] = useState(false);
-  const [view, setView] = useState<'list' | 'grid'>('list');
+  const [view, setView] = useState<'list' | 'grid'>('grid');
+  const [search, setSearch] = useState(params.get('search') ?? '');
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const toast = useToast();
+
+  // Search-as-you-type: debounce the URL write so we don't refetch on every keystroke.
+  useEffect(() => {
+    const handle = setTimeout(() => setFilter('search', search.trim()), 300);
+    return () => clearTimeout(handle);
+  }, [search]);
 
   const queryString = params.toString();
   const { data, isLoading } = useQuery({
@@ -80,6 +91,13 @@ export function ProductsPage(): JSX.Element {
       setDeleting(null);
       invalidate();
     },
+  });
+
+  const edit = useMutation({
+    mutationFn: ({ id, patch }: { id: string; patch: ProductPatch }) =>
+      api(`/products/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+    onError: (err) => toast.error(errorMessage(err)),
+    onSettled: invalidate,
   });
 
   function setFilter(key: string, value: string): void {
@@ -123,10 +141,8 @@ export function ProductsPage(): JSX.Element {
       <Card className="flex flex-wrap items-center gap-2 p-2.5">
         <input
           placeholder="Search name or URL…"
-          defaultValue={params.get('search') ?? ''}
-          onKeyDown={(e) =>
-            e.key === 'Enter' && setFilter('search', (e.target as HTMLInputElement).value)
-          }
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
           className="h-9 min-w-52 flex-1 rounded-md border border-line-strong bg-card px-3 text-sm text-fg placeholder:text-fg-subtle focus:border-brand focus:outline-none"
         />
         <Select
@@ -232,6 +248,7 @@ export function ProductsPage(): JSX.Element {
               busy={pendingId === p.id}
               onOpen={() => navigate(`/products/${p.id}`)}
               onAction={(verb) => action.mutate({ id: p.id, verb })}
+              onEdit={(patch) => edit.mutate({ id: p.id, patch })}
               onDelete={() => setDeleting(p)}
             />
           ))}
@@ -245,6 +262,7 @@ export function ProductsPage(): JSX.Element {
               busy={pendingId === p.id}
               onOpen={() => navigate(`/products/${p.id}`)}
               onAction={(verb) => action.mutate({ id: p.id, verb })}
+              onEdit={(patch) => edit.mutate({ id: p.id, patch })}
               onDelete={() => setDeleting(p)}
             />
           ))}
@@ -319,6 +337,17 @@ function RowActions({
 }): JSX.Element {
   return (
     <div className="flex shrink-0 gap-1">
+      <a
+        href={product.url}
+        target="_blank"
+        rel="noreferrer"
+        aria-label="Open on marketplace"
+        title="Open on marketplace"
+        onClick={(e) => e.stopPropagation()}
+        className="inline-flex size-8 items-center justify-center rounded-md text-fg-muted transition-colors hover:bg-surface-2 hover:text-fg"
+      >
+        <ExternalLink className="size-4" aria-hidden />
+      </a>
       <IconButton
         icon={RefreshCw}
         label="Check now"
@@ -335,6 +364,135 @@ function RowActions({
   );
 }
 
+/** Per-product patch shape for the inline editors (target price, check interval). */
+type ProductPatch = { targetPrice?: number | null; checkIntervalMinutes?: number | null };
+
+/** Human interval label; null = "default" (falls back to the global cadence). */
+function fmtInterval(mins: number | null): string {
+  if (mins === null) return 'default';
+  if (mins % 60 === 0) return `${mins / 60}h`;
+  if (mins > 60) return `${Math.floor(mins / 60)}h ${mins % 60}m`;
+  return `${mins}m`;
+}
+
+/**
+ * A compact chip that reveals a numeric input on click and commits on
+ * Enter/blur (Esc cancels). Empty commits to null. Used for the per-product
+ * target price and check interval, editable in place from the list.
+ */
+function InlineNumber({
+  icon: Icon,
+  value,
+  min,
+  max,
+  placeholder,
+  ariaLabel,
+  render,
+  onSave,
+}: {
+  icon: LucideIcon;
+  value: number | null;
+  min: number;
+  max: number;
+  placeholder: string;
+  ariaLabel: string;
+  render: (v: number | null) => string;
+  onSave: (v: number | null) => void;
+}): JSX.Element {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+
+  function commit(): void {
+    const text = draft.trim();
+    const next = text === '' ? null : Math.round(Number(text));
+    setEditing(false);
+    if (next !== null && (!Number.isFinite(next) || next < min || next > max)) return;
+    if (next !== value) onSave(next);
+  }
+
+  if (editing) {
+    return (
+      <input
+        autoFocus
+        type="number"
+        inputMode="numeric"
+        value={draft}
+        min={min}
+        max={max}
+        placeholder={placeholder}
+        aria-label={ariaLabel}
+        onClick={(e) => e.stopPropagation()}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            commit();
+          } else if (e.key === 'Escape') {
+            setEditing(false);
+          }
+        }}
+        className="h-6 w-20 rounded-md border border-brand bg-card px-1.5 text-xs text-fg focus:outline-none"
+      />
+    );
+  }
+  return (
+    <button
+      aria-label={ariaLabel}
+      title={ariaLabel}
+      onClick={(e) => {
+        e.stopPropagation();
+        setDraft(value === null ? '' : String(value));
+        setEditing(true);
+      }}
+      className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-xs transition-colors ${
+        value === null
+          ? 'border-dashed border-line text-fg-subtle hover:text-fg'
+          : 'border-line text-fg-muted hover:border-brand hover:text-fg'
+      }`}
+    >
+      <Icon className="size-3" aria-hidden />
+      <span className="nums">{render(value)}</span>
+    </button>
+  );
+}
+
+/** Inline target-price + check-interval controls, shared by list and grid. */
+function ControlChips({
+  product,
+  onEdit,
+  className = '',
+}: {
+  product: Product;
+  onEdit: (patch: ProductPatch) => void;
+  className?: string;
+}): JSX.Element {
+  return (
+    <div className={`flex items-center gap-1.5 ${className}`}>
+      <InlineNumber
+        icon={Target}
+        value={product.targetPrice === null ? null : Number(product.targetPrice)}
+        min={1}
+        max={100_000_000}
+        placeholder="₹ target"
+        ariaLabel="Target price"
+        render={(v) => (v === null ? 'target' : inr(v))}
+        onSave={(v) => onEdit({ targetPrice: v })}
+      />
+      <InlineNumber
+        icon={Timer}
+        value={product.checkIntervalMinutes}
+        min={10}
+        max={1440}
+        placeholder="minutes"
+        ariaLabel="Check interval in minutes"
+        render={fmtInterval}
+        onSave={(v) => onEdit({ checkIntervalMinutes: v })}
+      />
+    </div>
+  );
+}
+
 function PriceBlock({ product }: { product: Product }): JSX.Element {
   if (product.currentPrice === null) {
     return <p className="text-sm text-fg-subtle">awaiting first check</p>;
@@ -347,9 +505,6 @@ function PriceBlock({ product }: { product: Product }): JSX.Element {
           <s>{inr(product.currentMrp)}</s> · {product.currentDiscountPct}% off
         </p>
       )}
-      {product.targetPrice && (
-        <p className="nums text-xs text-brand-subtle-fg">target {inr(product.targetPrice)}</p>
-      )}
     </div>
   );
 }
@@ -359,12 +514,14 @@ function ProductRow({
   busy,
   onOpen,
   onAction,
+  onEdit,
   onDelete,
 }: {
   product: Product;
   busy: boolean;
   onOpen: () => void;
   onAction: (verb: 'pause' | 'resume' | 'check') => void;
+  onEdit: (patch: ProductPatch) => void;
   onDelete: () => void;
 }): JSX.Element {
   const low = product.allTimeLow;
@@ -398,10 +555,13 @@ function ProductRow({
         </div>
       )}
 
-      {/* Price + actions — own divided row on mobile, inline on desktop */}
+      {/* Price + controls — own divided row on mobile, inline on desktop */}
       <div className="flex items-center justify-between gap-3 border-t border-line pt-3 sm:shrink-0 sm:border-0 sm:pt-0">
         <PriceBlock product={product} />
-        <RowActions product={product} busy={busy} onAction={onAction} onDelete={onDelete} />
+        <div className="flex flex-col items-end gap-1.5">
+          <RowActions product={product} busy={busy} onAction={onAction} onDelete={onDelete} />
+          <ControlChips product={product} onEdit={onEdit} />
+        </div>
       </div>
     </Card>
   );
@@ -412,12 +572,14 @@ function ProductGridCard({
   busy,
   onOpen,
   onAction,
+  onEdit,
   onDelete,
 }: {
   product: Product;
   busy: boolean;
   onOpen: () => void;
   onAction: (verb: 'pause' | 'resume' | 'check') => void;
+  onEdit: (patch: ProductPatch) => void;
   onDelete: () => void;
 }): JSX.Element {
   return (
@@ -437,6 +599,7 @@ function ProductGridCard({
           pct={product.currentDiscountPct ? -Number(product.currentDiscountPct) : null}
         />
       </div>
+      <ControlChips product={product} onEdit={onEdit} className="mt-3" />
       <div className="mt-3 flex items-center justify-between border-t border-line pt-3">
         <span className="text-xs text-fg-subtle">checked {relTime(product.lastCheckedAt)}</span>
         <RowActions product={product} busy={busy} onAction={onAction} onDelete={onDelete} />

@@ -50,6 +50,12 @@ const patchSchema = z.object({
     .regex(/^\d{1,2}:\d{2}$/)
     .nullable()
     .optional(),
+  /** Daily full-sweep time (HH:MM); null disables it. */
+  dailyCheckTime: z
+    .string()
+    .regex(/^\d{1,2}:\d{2}$/)
+    .nullable()
+    .optional(),
   nearLowThresholdPct: z.number().min(0).max(50).optional(),
   /** 6-digit India delivery pincode for location-aware scraping; null clears it. */
   pincode: z

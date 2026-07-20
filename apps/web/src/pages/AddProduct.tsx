@@ -22,7 +22,6 @@ export function AddProductPage(): JSX.Element {
   const [url, setUrl] = useState('');
   const [preview, setPreview] = useState<Extract<PreviewResult, { kind: 'preview' }> | null>(null);
   const [note, setNote] = useState<string | null>(null);
-  const [displayName, setDisplayName] = useState('');
   const [targetPrice, setTargetPrice] = useState('');
   const [threshold, setThreshold] = useState('');
   const [tags, setTags] = useState('');
@@ -47,7 +46,6 @@ export function AddProductPage(): JSX.Element {
       switch (result.kind) {
         case 'preview':
           setPreview(result);
-          setDisplayName(result.snapshot.name);
           break;
         case 'unsupported':
           setNote(
@@ -82,7 +80,6 @@ export function AddProductPage(): JSX.Element {
           marketplace: preview!.marketplace,
           marketplaceProductId: preview!.productId,
           snapshot: preview!.snapshot,
-          displayName: displayName.trim() || undefined,
           targetPrice: targetPrice ? Number(targetPrice) : undefined,
           dropThresholdPct: threshold ? Number(threshold) : undefined,
           notes: notes || undefined,
@@ -153,9 +150,6 @@ export function AddProductPage(): JSX.Element {
           </div>
 
           <div className="mt-5 grid gap-3 border-t border-line pt-4 sm:grid-cols-2">
-            <Field label="Display name">
-              <Input value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
-            </Field>
             <Field
               label="Target price (₹, optional)"
               hint={

@@ -79,10 +79,10 @@ export function ImportPage(): JSX.Element {
       <h1 className="text-2xl font-semibold text-fg">Bulk import</h1>
       <p className="text-sm text-fg-muted">
         Upload a .csv or .xlsx with a <b className="text-fg">url</b> column (required) and optional{' '}
-        <b className="text-fg">name</b>, <b className="text-fg">target price</b>,{' '}
-        <b className="text-fg">threshold</b>, <b className="text-fg">notes</b>, and{' '}
-        <b className="text-fg">tags</b> columns. Nothing is saved until you confirm the review
-        below.
+        <b className="text-fg">target price</b>, <b className="text-fg">threshold</b>,{' '}
+        <b className="text-fg">notes</b>, and <b className="text-fg">tags</b> columns. Product names
+        are fetched from the marketplace automatically. Nothing is saved until you confirm the
+        review below.
       </p>
 
       <label

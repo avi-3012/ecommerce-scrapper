@@ -70,6 +70,7 @@ export interface Product {
   notes: string;
   targetPrice: string | null;
   dropThresholdPct: string | null;
+  checkIntervalMinutes: number | null;
   status: ProductStatus;
   consecutiveFailures: number;
   currentPrice: string | null;
@@ -186,6 +187,7 @@ export interface SettingsView {
   digestTime: string | null;
   nearLowThresholdPct: string;
   pincode: string | null;
+  dailyCheckTime: string | null;
 }
 
 export interface PreviewSnapshot {
@@ -229,7 +231,7 @@ export interface CompareData {
 export interface ImportReview {
   filename: string;
   totalRows: number;
-  valid: Array<Record<string, unknown> & { rowNumber: number; url: string; name?: string }>;
+  valid: Array<Record<string, unknown> & { rowNumber: number; url: string }>;
   duplicates: Array<{ rowNumber: number; url: string; reason: string }>;
   invalid: Array<{ rowNumber: number; url: string; reason: string }>;
 }
