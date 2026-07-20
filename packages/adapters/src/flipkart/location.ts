@@ -48,31 +48,50 @@ export function extractApiPricing(json: string): Omit<PincodePricing, 'pincode'>
   } catch {
     return null;
   }
-  const candidates: Array<{ price: number; mrp: number }> = [];
-  let stock: PincodePricing['stockStatus'] = 'unknown';
-  const walk = (n: unknown): void => {
-    if (!n || typeof n !== 'object') return;
+  // Read the AUTHORITATIVE buy-box price for the selected product, not a scan of
+  // every finalPrice on the page: the response also carries accessory prices
+  // (₹269/₹999, …) and per-variant/EMI figures, and picking among them by
+  // heuristic makes the extracted price flap between checks.
+  const pc = ((state as Record<string, unknown>)?.RESPONSE as Record<string, unknown>)?.pageData as
+    Record<string, unknown> | undefined;
+  const pageContext = pc?.pageContext as Record<string, unknown> | undefined;
+  if (!pageContext) return null;
+
+  const pricing = pageContext.pricing as Record<string, unknown> | undefined;
+  const psi = (
+    ((pageContext.fdpEventTracking as Record<string, unknown>)?.events as Record<string, unknown>)
+      ?.psi as Record<string, unknown>
+  )?.ppd as Record<string, unknown> | undefined;
+
+  const price =
+    numOf(pricing?.finalPrice) ?? numOf(pricing?.fsp) ?? numOf(psi?.finalPrice) ?? numOf(psi?.fsp);
+  if (price === null || price <= 0) return null;
+
+  const rawMrp = numOf(pricing?.mrp) ?? numOf(psi?.mrp);
+  const mrp = rawMrp !== null && rawMrp >= price ? rawMrp : null;
+
+  // A buyable buy-box price means in stock; only override if the product context
+  // explicitly flags otherwise (accessories live in slots, not pageContext).
+  let stock: PincodePricing['stockStatus'] = 'in_stock';
+  const findOos = (n: unknown): void => {
+    if (stock === 'out_of_stock' || !n || typeof n !== 'object') return;
     if (Array.isArray(n)) {
-      n.forEach(walk);
+      n.forEach(findOos);
       return;
     }
     const o = n as Record<string, unknown>;
-    if (typeof o.availabilityStatus === 'string') {
-      if (/IN_STOCK/i.test(o.availabilityStatus)) stock = 'in_stock';
-      else if (/OUT_OF_STOCK|SOLD_OUT|UNSERVICEABLE|COMING_SOON/i.test(o.availabilityStatus))
-        stock = 'out_of_stock';
+    if (
+      typeof o.availabilityStatus === 'string' &&
+      /OUT_OF_STOCK|SOLD_OUT|UNSERVICEABLE|COMING_SOON/i.test(o.availabilityStatus)
+    ) {
+      stock = 'out_of_stock';
+      return;
     }
-    // The product pricing object carries finalPrice AND mrp together.
-    const fp = numOf(o.finalPrice);
-    const mrp = numOf(o.mrp);
-    if (fp !== null && mrp !== null && fp > 0 && mrp >= fp) candidates.push({ price: fp, mrp });
-    for (const k of Object.keys(o)) walk(o[k]);
+    for (const k of Object.keys(o)) findOos(o[k]);
   };
-  walk(state);
-  if (candidates.length === 0) return null;
-  // Largest such pair = the product price (avoids EMI/exchange sub-amounts).
-  const best = candidates.reduce((a, b) => (b.price > a.price ? b : a));
-  return { price: best.price, mrp: best.mrp, stockStatus: stock };
+  findOos(pageContext);
+
+  return { price, mrp, stockStatus: stock };
 }
 
 /**
