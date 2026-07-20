@@ -1,9 +1,15 @@
-import type { ExtractionTier, Marketplace, ProductSnapshot } from '@pricepulse/shared';
+import type { ExtractionTier, Marketplace, ProductSnapshot, ScrapeDebug } from '@pricepulse/shared';
 
 /** Per-check fetch options threaded from user settings. */
 export interface FetchOptions {
   /** Delivery pincode for location-aware scraping (Amazon localises by it). */
   pincode?: string | null;
+  /**
+   * Optional mutable diagnostics sink. When present, the adapter records its
+   * price-resolution decisions here (pincode requested/applied, API vs HTML
+   * price, proxy session) for the per-check audit trail. Never load-bearing.
+   */
+  debug?: ScrapeDebug;
 }
 
 /** A fetched listing page before parsing. */

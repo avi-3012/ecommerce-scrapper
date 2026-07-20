@@ -107,8 +107,12 @@ export async function amazonLocationCookie(
  * minted on a different proxy IP) and the price is the default-location one.
  */
 export function amazonLocationApplied(html: string, pincode: string): boolean {
-  const text = cheerio.load(html)('#glow-ingress-line2').text();
-  return text.includes(pincode);
+  return amazonResolvedLocation(html).includes(pincode);
+}
+
+/** The delivery location string the Amazon page actually shows (glow ingress). */
+export function amazonResolvedLocation(html: string): string {
+  return cheerio.load(html)('#glow-ingress-line2').text().replace(/\s+/g, ' ').trim();
 }
 
 /** Test-only: clear the location cache. */

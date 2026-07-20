@@ -3,6 +3,7 @@ import type { FetchOptions, MarketplaceAdapter, RawPage, UrlRecognition } from '
 import { CheckError } from '../errors.js';
 import { httpFetch } from '../fetch/http.js';
 import type { FetchFn } from '../fetch/http.js';
+import { proxySession, resolveExitIp } from '../fetch/proxy.js';
 import { FLIPKART_DOMAINS, extractFlipkartIds, recognizeFlipkart } from './canonicalize.js';
 import { parseFlipkartPage } from './parse.js';
 import { fetchFlipkartPincodePricing, injectPincodePricing } from './location.js';
@@ -18,21 +19,44 @@ export class FlipkartAdapter implements MarketplaceAdapter {
   }
 
   async fetch(canonicalUrl: string, opts?: FetchOptions): Promise<RawPage> {
+    const debug = opts?.debug;
+    if (debug) {
+      debug.proxySession = proxySession() ?? null;
+      debug.exitIp = await resolveExitIp();
+    }
     const page = await this.fetchFn(canonicalUrl);
+    if (debug) {
+      debug.fetch = { finalUrl: page.url, bodyBytes: page.body.length, tier: page.tier };
+    }
     // Flipkart price/stock are location-specific. When a pincode is set, fetch
     // the localized price/MRP/stock from Flipkart's page/fetch API and inject it
     // so the parser overrides those fields (offers still come from the HTML).
     if (opts?.pincode) {
+      if (debug) debug.pincodeRequested = opts.pincode;
       const url = new URL(canonicalUrl);
-      const pricing = await fetchFlipkartPincodePricing(url.pathname + url.search, opts.pincode);
-      if (!pricing) {
+      const result = await fetchFlipkartPincodePricing(url.pathname + url.search, opts.pincode);
+      if (debug) {
+        debug.pincode = {
+          apiStatus: result.status,
+          applied: result.applied,
+          city: result.city,
+          verified: result.pricing !== null,
+          apiPrice: result.pricing?.price ?? null,
+          apiMrp: result.pricing?.mrp ?? null,
+          attempts: result.attempts,
+          raw: result.raw,
+          seller: result.seller,
+          sample: result.sample,
+        };
+      }
+      if (!result.pricing) {
         // A pincode is configured but its localized price couldn't be fetched.
         // Do NOT fall back to the IP-default price: the proxy IP's region varies
         // between checks, so that records a wrong price and fires a false drop.
         // Fail the check transiently — the last known price is preserved.
         throw new CheckError('other', `Flipkart pincode ${opts.pincode} pricing unavailable`);
       }
-      page.body = injectPincodePricing(page.body, pricing);
+      page.body = injectPincodePricing(page.body, result.pricing);
     }
     return page;
   }

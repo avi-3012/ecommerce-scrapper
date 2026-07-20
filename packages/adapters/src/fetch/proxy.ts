@@ -1,3 +1,5 @@
+import { gotScraping } from 'got-scraping';
+
 /**
  * Outbound proxy config (R-2 mitigation). Both the tier-1 HTTP fetch and the
  * tier-2 browser fetch route through a residential/rotating proxy when
@@ -69,4 +71,66 @@ export function playwrightProxy(): PlaywrightProxy | undefined {
 /** Host:port only, for safe logging (never prints credentials). */
 export function proxyLabel(): string | undefined {
   return playwrightProxy()?.server;
+}
+
+/**
+ * The proxy region + sticky-session token from the username (e.g.
+ * "region-IN-sid-qAeygDrY"), for the scrape-audit trail — it identifies which
+ * exit-IP pool a check used when diagnosing location/price variance. Returns
+ * the raw username tail when no recognised tokens are present; never the
+ * password.
+ */
+export function proxySession(): string | undefined {
+  const raw = scraperProxyUrl();
+  if (!raw) return undefined;
+  try {
+    const user = decodeURIComponent(new URL(raw).username);
+    if (!user) return undefined;
+    const region = user.match(/region-[A-Za-z0-9]+/i)?.[0];
+    const sid = user.match(/sid-[A-Za-z0-9]+/i)?.[0];
+    const tokens = [region, sid].filter(Boolean);
+    return tokens.length ? tokens.join('-') : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+let exitIpCache: { ip: string | null; at: number } | null = null;
+
+/**
+ * The actual outbound IP a scrape uses, resolved THROUGH the same proxy so it
+ * reflects the exit node the marketplace saw (the sticky session is stable for
+ * a few minutes, so this is cached for 60s to avoid an echo call per check).
+ * Best-effort: returns null on any failure and never throws. Set
+ * SCRAPE_AUDIT_EXIT_IP=0 to disable the echo entirely.
+ *
+ * This is the field that proves region-based price flapping — Flipkart's
+ * IP-default price is driven by the exit node's region, which rotates.
+ */
+export async function resolveExitIp(nowMs: number = Date.now()): Promise<string | null> {
+  if (process.env.SCRAPE_AUDIT_EXIT_IP === '0') return null;
+  if (exitIpCache && nowMs - exitIpCache.at < 60_000) return exitIpCache.ip;
+  const proxyUrl = scraperProxyUrl();
+  let ip: string | null = null;
+  for (const url of ['https://checkip.amazonaws.com', 'https://api.ipify.org']) {
+    try {
+      const res = await gotScraping({
+        url,
+        timeout: { request: 6000 },
+        throwHttpErrors: false,
+        ...(proxyUrl ? { proxyUrl, http2: false } : {}),
+      });
+      if (res.statusCode === 200) {
+        const candidate = res.body.trim().split(/\s+/)[0];
+        if (candidate && /^[0-9a-fA-F.:]+$/.test(candidate)) {
+          ip = candidate;
+          break;
+        }
+      }
+    } catch {
+      // try the next echo endpoint
+    }
+  }
+  exitIpCache = { ip, at: nowMs };
+  return ip;
 }

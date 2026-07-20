@@ -3,7 +3,12 @@ import type { FetchOptions, MarketplaceAdapter, RawPage, UrlRecognition } from '
 import { CheckError } from '../errors.js';
 import { httpFetch } from '../fetch/http.js';
 import type { FetchFn } from '../fetch/http.js';
-import { amazonLocationApplied, amazonLocationCookie } from '../fetch/location.js';
+import {
+  amazonLocationApplied,
+  amazonLocationCookie,
+  amazonResolvedLocation,
+} from '../fetch/location.js';
+import { proxySession, resolveExitIp } from '../fetch/proxy.js';
 import { AMAZON_DOMAINS, extractAsin, recognizeAmazon } from './canonicalize.js';
 import { parseAmazonPage } from './parse.js';
 import { collectAmazonOffers, injectOffers } from './offers.js';
@@ -19,9 +24,20 @@ export class AmazonAdapter implements MarketplaceAdapter {
   }
 
   async fetch(canonicalUrl: string, opts?: FetchOptions): Promise<RawPage> {
-    if (!opts?.pincode) {
-      return this.enrichOffers(await this.fetchFn(canonicalUrl), undefined);
+    const debug = opts?.debug;
+    if (debug) {
+      debug.proxySession = proxySession() ?? null;
+      debug.exitIp = await resolveExitIp();
     }
+    if (!opts?.pincode) {
+      const page = await this.fetchFn(canonicalUrl);
+      if (debug) {
+        debug.fetch = { finalUrl: page.url, bodyBytes: page.body.length, tier: page.tier };
+        debug.amazon = { resolvedLocation: amazonResolvedLocation(page.body) || null };
+      }
+      return this.enrichOffers(page, undefined);
+    }
+    if (debug) debug.pincodeRequested = opts.pincode;
 
     // Localise the whole session to the pincode. The glow cookie is IP-bound, so
     // a cached cookie minted on a different proxy IP can be ignored — retry with
@@ -29,11 +45,26 @@ export class AmazonAdapter implements MarketplaceAdapter {
     for (let attempt = 0; attempt < 3; attempt++) {
       const cookie = await amazonLocationCookie(opts.pincode, canonicalUrl, attempt > 0);
       if (!cookie) {
+        if (debug) debug.amazon = { locationApplied: false, attempts: attempt + 1 };
         throw new CheckError('other', `Amazon location for pincode ${opts.pincode} unavailable`);
       }
       const page = await this.fetchFn(canonicalUrl, { headers: { cookie } });
+      const resolvedLocation = amazonResolvedLocation(page.body);
+      if (debug) {
+        debug.fetch = { finalUrl: page.url, bodyBytes: page.body.length, tier: page.tier };
+      }
       if (amazonLocationApplied(page.body, opts.pincode)) {
+        if (debug) {
+          debug.amazon = { locationApplied: true, attempts: attempt + 1, resolvedLocation };
+        }
         return this.enrichOffers(page, cookie);
+      }
+      if (debug) {
+        debug.amazon = {
+          locationApplied: false,
+          attempts: attempt + 1,
+          resolvedLocation: resolvedLocation || null,
+        };
       }
     }
     // Never record a default-location price — fail transiently; last price kept.

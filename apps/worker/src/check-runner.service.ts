@@ -2,7 +2,12 @@ import { Inject, Injectable } from '@nestjs/common';
 import type { OnModuleInit } from '@nestjs/common';
 import { createBrowserFetch, createDefaultRegistry, proxyLabel } from '@pricepulse/adapters';
 import type { AdapterRegistry, FetchFn } from '@pricepulse/adapters';
-import { getUserWithSettings, performCheck, recordCheck } from '@pricepulse/core';
+import {
+  getUserWithSettings,
+  performCheck,
+  recordCheck,
+  recordScrapeAudit,
+} from '@pricepulse/core';
 import type { RecordedCheck } from '@pricepulse/core';
 import type { Product } from '@pricepulse/db';
 import { PrismaService } from './prisma.service.js';
@@ -42,6 +47,8 @@ export class CheckRunnerService implements OnModuleInit {
       pincode: settings.pincode,
     });
     const result = await recordCheck(this.prisma, product, outcome, settings);
+    // Per-check debug trail (best-effort; never blocks the check).
+    await recordScrapeAudit(this.prisma, product, outcome);
     // Live-update event (WP-3.6): fire-and-forget; the stream is never load-bearing.
     const payload = JSON.stringify({ type: 'check', productId: product.id });
     await this.prisma.$executeRaw`SELECT pg_notify('pricepulse_events', ${payload})`.catch(

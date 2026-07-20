@@ -29,6 +29,35 @@ export interface PincodePricing {
   pincode: string;
 }
 
+/**
+ * The full result of a pincode-pricing fetch, including the trail we need for
+ * the scrape-audit even when the price is NOT trusted: the HTTP status, the
+ * pincode Flipkart actually resolved, and how many attempts we made. `pricing`
+ * is non-null only when the resolved pincode matches the one we requested.
+ */
+export interface PincodeFetchResult {
+  pricing: PincodePricing | null;
+  status: number | null;
+  applied: string | null;
+  city: string | null;
+  attempts: number;
+  /** The exact pricing-node fields used and their JSON path (source-of-truth trail). */
+  raw: Record<string, unknown> | null;
+  /** Buy-box seller the price came from, when identifiable. */
+  seller: { id: string | null; name: string | null; count: number | null } | null;
+  /** Bounded raw JSON snippet around the pricing node — the source bytes. */
+  sample: string | null;
+}
+
+/** Detailed pricing extraction: the value plus the raw fields/path it came from. */
+export interface ApiPricingDetail {
+  price: number;
+  mrp: number | null;
+  stockStatus: PincodePricing['stockStatus'];
+  raw: Record<string, unknown>;
+  seller: { id: string | null; name: string | null; count: number | null } | null;
+}
+
 function numOf(v: unknown): number | null {
   if (v === null || v === undefined) return null;
   if (typeof v === 'number') return Number.isFinite(v) ? v : null;
@@ -40,18 +69,22 @@ function numOf(v: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-/** Extract the product price/MRP/stock from a page/fetch JSON response. */
-export function extractApiPricing(json: string): Omit<PincodePricing, 'pincode'> | null {
+/**
+ * Detailed price/MRP/stock extraction from a page/fetch JSON response, plus the
+ * exact source fields and buy-box seller for the audit trail.
+ *
+ * Reads the AUTHORITATIVE buy-box price for the selected product, not a scan of
+ * every finalPrice on the page: the response also carries accessory prices
+ * (₹269/₹999, …) and per-variant/EMI figures, and picking among them by
+ * heuristic makes the extracted price flap between checks.
+ */
+export function extractApiPricingDetailed(json: string): ApiPricingDetail | null {
   let state: unknown;
   try {
     state = JSON.parse(json);
   } catch {
     return null;
   }
-  // Read the AUTHORITATIVE buy-box price for the selected product, not a scan of
-  // every finalPrice on the page: the response also carries accessory prices
-  // (₹269/₹999, …) and per-variant/EMI figures, and picking among them by
-  // heuristic makes the extracted price flap between checks.
   const pc = ((state as Record<string, unknown>)?.RESPONSE as Record<string, unknown>)?.pageData as
     Record<string, unknown> | undefined;
   const pageContext = pc?.pageContext as Record<string, unknown> | undefined;
@@ -63,8 +96,21 @@ export function extractApiPricing(json: string): Omit<PincodePricing, 'pincode'>
       ?.psi as Record<string, unknown>
   )?.ppd as Record<string, unknown> | undefined;
 
-  const price =
-    numOf(pricing?.finalPrice) ?? numOf(pricing?.fsp) ?? numOf(psi?.finalPrice) ?? numOf(psi?.fsp);
+  // Track which field/path produced the price so the audit shows the source.
+  let source: string | null = null;
+  let price: number | null = null;
+  for (const [candidate, path] of [
+    [numOf(pricing?.finalPrice), 'pageContext.pricing.finalPrice'],
+    [numOf(pricing?.fsp), 'pageContext.pricing.fsp'],
+    [numOf(psi?.finalPrice), 'pageContext…psi.ppd.finalPrice'],
+    [numOf(psi?.fsp), 'pageContext…psi.ppd.fsp'],
+  ] as Array<[number | null, string]>) {
+    if (candidate !== null) {
+      price = candidate;
+      source = path;
+      break;
+    }
+  }
   if (price === null || price <= 0) return null;
 
   const rawMrp = numOf(pricing?.mrp) ?? numOf(psi?.mrp);
@@ -91,7 +137,60 @@ export function extractApiPricing(json: string): Omit<PincodePricing, 'pincode'>
   };
   findOos(pageContext);
 
-  return { price, mrp, stockStatus: stock };
+  return {
+    price,
+    mrp,
+    stockStatus: stock,
+    raw: {
+      source,
+      finalPrice: numOf(pricing?.finalPrice),
+      fsp: numOf(pricing?.fsp),
+      mrp: numOf(pricing?.mrp),
+      psiFinalPrice: numOf(psi?.finalPrice),
+      psiFsp: numOf(psi?.fsp),
+      psiMrp: numOf(psi?.mrp),
+    },
+    seller: extractSeller(pageContext),
+  };
+}
+
+/** Extract the product price/MRP/stock from a page/fetch JSON response. */
+export function extractApiPricing(json: string): Omit<PincodePricing, 'pincode'> | null {
+  const detail = extractApiPricingDetailed(json);
+  return detail ? { price: detail.price, mrp: detail.mrp, stockStatus: detail.stockStatus } : null;
+}
+
+/** Best-effort buy-box seller lookup (id/name/count) for the audit trail. */
+function extractSeller(
+  pageContext: Record<string, unknown>,
+): { id: string | null; name: string | null; count: number | null } | null {
+  let found: { id: string | null; name: string | null; count: number | null } | null = null;
+  const walk = (n: unknown): void => {
+    if (found || !n || typeof n !== 'object') return;
+    if (Array.isArray(n)) {
+      n.forEach(walk);
+      return;
+    }
+    const o = n as Record<string, unknown>;
+    if (typeof o.sellerId === 'string' || typeof o.sellerName === 'string') {
+      found = {
+        id: typeof o.sellerId === 'string' ? o.sellerId : null,
+        name: typeof o.sellerName === 'string' ? o.sellerName : null,
+        count: numOf(o.sellerCount),
+      };
+      return;
+    }
+    for (const k of Object.keys(o)) walk(o[k]);
+  };
+  walk(pageContext);
+  return found;
+}
+
+/** A bounded raw JSON snippet around the pricing node — the source-of-truth bytes. */
+function pricingSample(body: string): string | null {
+  const idx = body.indexOf('"pricing"');
+  if (idx === -1) return null;
+  return body.slice(Math.max(0, idx - 40), idx + 600);
 }
 
 /**
@@ -101,14 +200,17 @@ export function extractApiPricing(json: string): Omit<PincodePricing, 'pincode'>
  * lets us detect the rare case where the API returns a 200 but silently used
  * the IP-default location instead of ours.
  */
-export function extractAppliedPincode(json: string): string | null {
+export function extractAppliedLocation(json: string): {
+  pincode: string | null;
+  city: string | null;
+} {
   let state: unknown;
   try {
     state = JSON.parse(json);
   } catch {
-    return null;
+    return { pincode: null, city: null };
   }
-  let found: string | null = null;
+  let found: { pincode: string | null; city: string | null } | null = null;
   const walk = (n: unknown): void => {
     if (found !== null || !n || typeof n !== 'object') return;
     if (Array.isArray(n)) {
@@ -122,14 +224,18 @@ export function extractAppliedPincode(json: string): string | null {
     ) {
       const p = String(o.pincode);
       if (/^\d{6}$/.test(p)) {
-        found = p;
+        found = { pincode: p, city: typeof o.city === 'string' ? o.city : null };
         return;
       }
     }
     for (const k of Object.keys(o)) walk(o[k]);
   };
   walk(state);
-  return found;
+  return found ?? { pincode: null, city: null };
+}
+
+export function extractAppliedPincode(json: string): string | null {
+  return extractAppliedLocation(json).pincode;
 }
 
 /**
@@ -141,9 +247,17 @@ export function extractAppliedPincode(json: string): string | null {
 export async function fetchFlipkartPincodePricing(
   pageUri: string,
   pincode: string,
-): Promise<PincodePricing | null> {
+): Promise<PincodeFetchResult> {
   const proxyUrl = scraperProxyUrl();
+  let status: number | null = null;
+  let applied: string | null = null;
+  let city: string | null = null;
+  let raw: Record<string, unknown> | null = null;
+  let seller: { id: string | null; name: string | null; count: number | null } | null = null;
+  let sample: string | null = null;
+  let attempts = 0;
   for (let attempt = 0; attempt < 3; attempt++) {
+    attempts++;
     try {
       const res = await gotScraping({
         url: 'https://1.rome.api.flipkart.com/api/4/page/fetch?cacheFirst=false',
@@ -163,19 +277,45 @@ export async function fetchFlipkartPincodePricing(
           locationContext: { pincode: Number(pincode), changed: true },
         }),
       });
+      status = res.statusCode;
       if (res.statusCode === 200) {
-        const pricing = extractApiPricing(res.body);
+        const detail = extractApiPricingDetailed(res.body);
+        // Capture the source-of-truth trail on every 200, even when unverified,
+        // so a rejected/flapping check is still fully explainable from the audit.
+        if (detail) {
+          raw = detail.raw;
+          seller = detail.seller;
+        }
+        sample = pricingSample(res.body) ?? sample;
         // Only trust the price when Flipkart confirms it applied OUR pincode.
         // If the resolved pincode differs (silently used the IP default) — or
         // can't be confirmed — retry; never record an unverified price.
-        const applied = extractAppliedPincode(res.body);
-        if (pricing && applied === pincode) return { ...pricing, pincode };
+        const loc = extractAppliedLocation(res.body);
+        applied = loc.pincode;
+        city = loc.city;
+        if (detail && applied === pincode) {
+          return {
+            pricing: {
+              price: detail.price,
+              mrp: detail.mrp,
+              stockStatus: detail.stockStatus,
+              pincode,
+            },
+            status,
+            applied,
+            city,
+            attempts,
+            raw,
+            seller,
+            sample,
+          };
+        }
       }
     } catch {
       // retry
     }
   }
-  return null;
+  return { pricing: null, status, applied, city, attempts, raw, seller, sample };
 }
 
 export function injectPincodePricing(html: string, pricing: PincodePricing): string {

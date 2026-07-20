@@ -2,11 +2,17 @@ import type { MarketplaceAdapter } from '@pricepulse/adapters';
 import { toCheckError } from '@pricepulse/adapters';
 import type { CheckError } from '@pricepulse/adapters';
 import type { FetchFn } from '@pricepulse/adapters';
-import type { ExtractionTier, ProductSnapshot } from '@pricepulse/shared';
+import type { ExtractionTier, ProductSnapshot, ScrapeDebug } from '@pricepulse/shared';
 
 export type CheckOutcome =
-  | { ok: true; snapshot: ProductSnapshot; tier: ExtractionTier; durationMs: number }
-  | { ok: false; error: CheckError; tier: ExtractionTier; durationMs: number };
+  | {
+      ok: true;
+      snapshot: ProductSnapshot;
+      tier: ExtractionTier;
+      durationMs: number;
+      debug: ScrapeDebug;
+    }
+  | { ok: false; error: CheckError; tier: ExtractionTier; durationMs: number; debug: ScrapeDebug };
 
 export interface PipelineOptions {
   /**
@@ -32,10 +38,20 @@ export async function performCheck(
   options: PipelineOptions = {},
 ): Promise<CheckOutcome> {
   const started = Date.now();
+  // A single diagnostics sink for the whole check, passed by reference into the
+  // adapter so partial progress survives a thrown fetch. Attached to every
+  // outcome for the scrape-audit trail.
+  const debug: ScrapeDebug = {};
 
-  const tier1 = await attempt(() => fetchAndParse(adapter, canonicalUrl, options.pincode));
+  const tier1 = await attempt(() => fetchAndParse(adapter, canonicalUrl, options.pincode, debug));
   if (tier1.ok) {
-    return { ok: true, snapshot: tier1.value, tier: 'http', durationMs: Date.now() - started };
+    return {
+      ok: true,
+      snapshot: tier1.value,
+      tier: 'http',
+      durationMs: Date.now() - started,
+      debug,
+    };
   }
 
   if (options.browserFetch && ESCALATABLE.has(tier1.error.reason)) {
@@ -44,20 +60,33 @@ export async function performCheck(
       return adapter.parse({ ...page, tier: 'browser' });
     });
     if (tier2.ok) {
-      return { ok: true, snapshot: tier2.value, tier: 'browser', durationMs: Date.now() - started };
+      return {
+        ok: true,
+        snapshot: tier2.value,
+        tier: 'browser',
+        durationMs: Date.now() - started,
+        debug,
+      };
     }
-    return { ok: false, error: tier2.error, tier: 'browser', durationMs: Date.now() - started };
+    return {
+      ok: false,
+      error: tier2.error,
+      tier: 'browser',
+      durationMs: Date.now() - started,
+      debug,
+    };
   }
 
-  return { ok: false, error: tier1.error, tier: 'http', durationMs: Date.now() - started };
+  return { ok: false, error: tier1.error, tier: 'http', durationMs: Date.now() - started, debug };
 }
 
 async function fetchAndParse(
   adapter: MarketplaceAdapter,
   canonicalUrl: string,
-  pincode?: string | null,
+  pincode: string | null | undefined,
+  debug: ScrapeDebug,
 ): Promise<ProductSnapshot> {
-  const page = await adapter.fetch(canonicalUrl, { pincode });
+  const page = await adapter.fetch(canonicalUrl, { pincode, debug });
   return adapter.parse(page);
 }
 

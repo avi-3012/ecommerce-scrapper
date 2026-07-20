@@ -143,7 +143,7 @@ export async function registerProduct(
   await recordCheck(
     prisma,
     product,
-    { ok: true, snapshot: params.snapshot, tier: 'http', durationMs: 0 },
+    { ok: true, snapshot: params.snapshot, tier: 'http', durationMs: 0, debug: {} },
     settings,
   );
 

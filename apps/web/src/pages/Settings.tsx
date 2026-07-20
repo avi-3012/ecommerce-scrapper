@@ -342,7 +342,7 @@ function SettingsForm({
 
       <Section
         title="Export data"
-        hint="Download your catalogue and history as CSV. The products file re-imports cleanly."
+        hint="Download your catalogue and history as CSV. The products file re-imports cleanly. The scrape audit is a per-check debug trail (pincode requested vs applied, API vs page price, which source won) for diagnosing price flapping."
       >
         <div className="flex flex-wrap gap-2">
           <a href="/api/export/products.csv" download>
@@ -358,6 +358,11 @@ function SettingsForm({
           <a href="/api/export/alerts.csv" download>
             <Button variant="secondary" icon={Download}>
               Alert log
+            </Button>
+          </a>
+          <a href="/api/export/scrape-audit.csv" download>
+            <Button variant="secondary" icon={Download}>
+              Scrape audit (debug)
             </Button>
           </a>
         </div>

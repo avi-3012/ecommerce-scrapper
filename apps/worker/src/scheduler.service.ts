@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type { OnModuleDestroy, OnModuleInit } from '@nestjs/common';
-import { getUserWithSettings, minutesOfDayIn } from '@pricepulse/core';
+import { getUserWithSettings, minutesOfDayIn, pruneScrapeAudits } from '@pricepulse/core';
 import type { Marketplace } from '@pricepulse/shared';
 import type { Product, Settings } from '@pricepulse/db';
 import { PrismaService } from './prisma.service.js';
@@ -15,6 +15,8 @@ const MAX_GAP_MS = 8_000;
 const BATCH_PER_MARKETPLACE = 15;
 /** Daily-sweep pacing: faster than the normal loop, still per-marketplace serial. */
 const SWEEP_GAP_MS = 1_500;
+/** How long to keep per-check scrape-audit rows before pruning. */
+const AUDIT_RETENTION_DAYS = 14;
 
 /**
  * The monitoring loop (WP-1.5). Every tick: read settings live (FR-2.1/6.2),
@@ -180,7 +182,8 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
-  /** Keep future price_history partitions provisioned (ADR-0002); daily. */
+  /** Keep future price_history partitions provisioned (ADR-0002); daily. Also
+   * prunes the per-check scrape-audit trail past its retention window. */
   private async partitionUpkeep(): Promise<void> {
     if (Date.now() - this.lastPartitionUpkeep < 24 * 3600 * 1000) return;
     try {
@@ -189,6 +192,12 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     } catch (err) {
       // Loud but non-fatal: inserts into a missing partition will fail loudly anyway (NFR-2).
       console.error('Partition upkeep failed:', err instanceof Error ? err.message : err);
+    }
+    try {
+      const removed = await pruneScrapeAudits(this.prisma, AUDIT_RETENTION_DAYS);
+      if (removed > 0) console.log(`Pruned ${removed} scrape-audit rows past retention`);
+    } catch (err) {
+      console.error('Scrape-audit prune failed:', err instanceof Error ? err.message : err);
     }
   }
 }

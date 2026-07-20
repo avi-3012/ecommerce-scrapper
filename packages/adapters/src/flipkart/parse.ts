@@ -165,7 +165,18 @@ export function parseFlipkartPage(html: string, expected?: FlipkartExpectedIds):
   }
 
   // ── Pincode-localised price/MRP/stock override (injected by the adapter from
-  // Flipkart's page/fetch API). Takes precedence over the IP-default HTML. ──
+  // Flipkart's page/fetch API). Takes precedence over the IP-default HTML. The
+  // pre-override (IP-default) price is recorded for the scrape audit so we can
+  // measure how far the localized price diverges from what the page shipped. The
+  // independent JSON-LD and embedded-JSON candidates are recorded too, so if the
+  // HTML strategies themselves disagree the audit shows every value seen. ──
+  if (price !== null) provenance.priceHtml = String(price);
+  const jsonLdPrice =
+    product?.offers?.price !== undefined ? parseInrAmount(String(product.offers.price)) : null;
+  if (jsonLdPrice !== null) provenance.priceJsonLd = String(jsonLdPrice);
+  const embeddedMatch = html.match(/"finalPrice"\s*:\s*"?(\d{2,9})/i);
+  const embeddedPrice = embeddedMatch ? parseInrAmount(embeddedMatch[1]) : null;
+  if (embeddedPrice !== null) provenance.priceEmbedded = String(embeddedPrice);
   const pincodeEl = $(`#${FLIPKART_PINCODE_MARKER}`);
   if (pincodeEl.length) {
     try {

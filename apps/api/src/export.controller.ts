@@ -1,6 +1,6 @@
 import { Controller, Get, Inject, Query, Res } from '@nestjs/common';
 import type { Response } from 'express';
-import type { PriceHistory } from '@pricepulse/db';
+import type { PriceHistory, ScrapeAudit } from '@pricepulse/db';
 import { PrismaService } from './prisma.service.js';
 
 /**
@@ -120,6 +120,98 @@ export class ExportController {
       }
       const last = batch[batch.length - 1]!;
       cursor = { id: last.id, checkedAt: last.checkedAt };
+    }
+    res.end();
+  }
+
+  /**
+   * Per-check scrape-audit trail (debugging). The key columns for diagnosing
+   * price flapping: `pincode requested` (is a pincode even set?), `pincode
+   * applied` + `verified` (did the marketplace honour it?), `price source`
+   * (did the localized price win, or the IP-default HTML?), and `api price` vs
+   * `html price` (how far they diverge). `?productId=` filters to one product.
+   */
+  @Get('scrape-audit.csv')
+  async scrapeAudit(@Res() res: Response, @Query('productId') productId?: string): Promise<void> {
+    startCsv(res, 'pricepulse-scrape-audit.csv');
+    res.write(
+      row([
+        'product',
+        'marketplace',
+        'checked at (UTC)',
+        'success',
+        'tier',
+        'scraped name',
+        'price',
+        'mrp',
+        'stock',
+        'price source',
+        'offers count',
+        'offers hash',
+        'pincode requested',
+        'pincode applied',
+        'verified',
+        'api status',
+        'api price',
+        'html price',
+        'exit ip',
+        'proxy session',
+        'duration ms',
+        'failure reason',
+        'failure detail',
+        'debug (json)',
+      ]),
+    );
+    const names = new Map(
+      (
+        await this.prisma.product.findMany({
+          select: { id: true, displayName: true, marketplace: true },
+        })
+      ).map((p) => [p.id, p]),
+    );
+    let cursor: bigint | null = null;
+    for (;;) {
+      const batch: ScrapeAudit[] = await this.prisma.scrapeAudit.findMany({
+        where: {
+          ...(productId ? { productId } : {}),
+          ...(cursor ? { id: { gt: cursor } } : {}),
+        },
+        orderBy: { id: 'asc' },
+        take: 5000,
+      });
+      if (batch.length === 0) break;
+      for (const a of batch) {
+        const p = names.get(a.productId);
+        res.write(
+          row([
+            p?.displayName ?? a.productId,
+            a.marketplace,
+            a.createdAt.toISOString(),
+            a.success ? 'yes' : 'no',
+            a.tier ?? '',
+            a.name ?? '',
+            a.price,
+            a.mrp,
+            a.stockStatus ?? '',
+            a.priceSource ?? '',
+            a.offersCount ?? '',
+            a.offersHash ?? '',
+            a.pincodeRequested ?? '',
+            a.pincodeApplied ?? '',
+            a.pincodeVerified === null ? '' : a.pincodeVerified ? 'yes' : 'no',
+            a.pincodeApiStatus ?? '',
+            a.apiPrice,
+            a.htmlPrice,
+            a.exitIp ?? '',
+            a.proxySession ?? '',
+            a.durationMs ?? '',
+            a.failureReason ?? '',
+            a.failureDetail ?? '',
+            JSON.stringify(a.debug),
+          ]),
+        );
+      }
+      cursor = batch[batch.length - 1]!.id;
     }
     res.end();
   }
