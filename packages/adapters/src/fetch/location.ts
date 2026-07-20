@@ -46,10 +46,13 @@ function cookieHeader(jar: Map<string, string>): string {
 export async function amazonLocationCookie(
   pincode: string,
   seedUrl: string,
+  forceRefresh = false,
 ): Promise<string | undefined> {
   const key = `amazon:${pincode}`;
-  const cached = locationCache.get(key);
-  if (cached && cached.expiresAt > Date.now()) return cached.cookie;
+  if (!forceRefresh) {
+    const cached = locationCache.get(key);
+    if (cached && cached.expiresAt > Date.now()) return cached.cookie;
+  }
 
   const proxyUrl = scraperProxyUrl();
   const proxyOpts = proxyUrl ? { proxyUrl, http2: false as const } : {};
@@ -95,6 +98,17 @@ export async function amazonLocationCookie(
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Whether a fetched Amazon page actually reflects the requested pincode. Amazon
+ * shows the resolved delivery location in the "glow" ingress (e.g. "Mumbai
+ * 400001"); if our pincode isn't there, the location cookie didn't take (e.g.
+ * minted on a different proxy IP) and the price is the default-location one.
+ */
+export function amazonLocationApplied(html: string, pincode: string): boolean {
+  const text = cheerio.load(html)('#glow-ingress-line2').text();
+  return text.includes(pincode);
 }
 
 /** Test-only: clear the location cache. */

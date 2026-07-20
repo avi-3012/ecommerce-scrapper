@@ -1,8 +1,9 @@
 import type { Marketplace, ProductSnapshot } from '@pricepulse/shared';
 import type { FetchOptions, MarketplaceAdapter, RawPage, UrlRecognition } from '../adapter.js';
+import { CheckError } from '../errors.js';
 import { httpFetch } from '../fetch/http.js';
 import type { FetchFn } from '../fetch/http.js';
-import { amazonLocationCookie } from '../fetch/location.js';
+import { amazonLocationApplied, amazonLocationCookie } from '../fetch/location.js';
 import { AMAZON_DOMAINS, extractAsin, recognizeAmazon } from './canonicalize.js';
 import { parseAmazonPage } from './parse.js';
 import { collectAmazonOffers, injectOffers } from './offers.js';
@@ -18,17 +19,34 @@ export class AmazonAdapter implements MarketplaceAdapter {
   }
 
   async fetch(canonicalUrl: string, opts?: FetchOptions): Promise<RawPage> {
-    // Localise the whole session (page + offer side-sheets) to the pincode.
-    const cookie = opts?.pincode
-      ? await amazonLocationCookie(opts.pincode, canonicalUrl)
-      : undefined;
-    const fetchOpts = cookie ? { headers: { cookie } } : undefined;
+    if (!opts?.pincode) {
+      return this.enrichOffers(await this.fetchFn(canonicalUrl), undefined);
+    }
 
-    const page = await this.fetchFn(canonicalUrl, fetchOpts);
-    // Expand every multi-offer card into its individual offers via Amazon's
-    // side-sheet AJAX endpoint (cheap tier-1 calls, same proxy/session), and
-    // carry them into parse via an injected marker script. A layout change that
-    // blocks expansion throws parse_failed here — no summary-only fallback.
+    // Localise the whole session to the pincode. The glow cookie is IP-bound, so
+    // a cached cookie minted on a different proxy IP can be ignored — retry with
+    // a freshly-minted cookie until the page actually reflects the pincode.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const cookie = await amazonLocationCookie(opts.pincode, canonicalUrl, attempt > 0);
+      if (!cookie) {
+        throw new CheckError('other', `Amazon location for pincode ${opts.pincode} unavailable`);
+      }
+      const page = await this.fetchFn(canonicalUrl, { headers: { cookie } });
+      if (amazonLocationApplied(page.body, opts.pincode)) {
+        return this.enrichOffers(page, cookie);
+      }
+    }
+    // Never record a default-location price — fail transiently; last price kept.
+    throw new CheckError('other', `Amazon did not apply pincode ${opts.pincode}`);
+  }
+
+  /**
+   * Expand every multi-offer card into its individual offers via Amazon's
+   * side-sheet AJAX endpoint (cheap tier-1 calls, same proxy/session/cookie),
+   * and carry them into parse via an injected marker script. A layout change
+   * that blocks expansion throws parse_failed here — no summary-only fallback.
+   */
+  private async enrichOffers(page: RawPage, cookie: string | undefined): Promise<RawPage> {
     const asin = extractAsin(new URL(page.url)) ?? undefined;
     if (asin) {
       const offers = await collectAmazonOffers(page.body, asin, this.fetchFn, cookie);

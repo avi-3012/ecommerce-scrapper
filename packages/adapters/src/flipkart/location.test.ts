@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { extractApiPricing } from './location.js';
+import { extractApiPricing, extractAppliedPincode } from './location.js';
 
 const pageFetch = (pageContext: unknown, extra: Record<string, unknown> = {}): string =>
   JSON.stringify({ RESPONSE: { pageData: { pageContext }, ...extra } });
@@ -48,5 +48,33 @@ describe('extractApiPricing (Flipkart page/fetch API)', () => {
   it('returns null on missing pageContext or bad JSON', () => {
     expect(extractApiPricing('{"a":1}')).toBeNull();
     expect(extractApiPricing('not json')).toBeNull();
+  });
+});
+
+describe('extractAppliedPincode', () => {
+  it('reads the resolved delivery pincode from the pincode component', () => {
+    const json = JSON.stringify({
+      RESPONSE: {
+        data: {
+          pincodeData: {
+            pincodeComponent: {
+              value: {
+                type: 'PINCODE',
+                city: 'Mumbai',
+                pincode: 400001,
+                sellerCount: 3,
+                singleSeller: false,
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(extractAppliedPincode(json)).toBe('400001');
+  });
+
+  it('returns null when the component is absent or JSON is bad', () => {
+    expect(extractAppliedPincode('{"a":1}')).toBeNull();
+    expect(extractAppliedPincode('nope')).toBeNull();
   });
 });

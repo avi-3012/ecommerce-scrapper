@@ -95,6 +95,44 @@ export function extractApiPricing(json: string): Omit<PincodePricing, 'pincode'>
 }
 
 /**
+ * The delivery pincode Flipkart actually RESOLVED for this response (not the one
+ * we asked for). It's carried in the "pincode component" — an object holding
+ * the pincode alongside seller/city info. Comparing it to our requested pincode
+ * lets us detect the rare case where the API returns a 200 but silently used
+ * the IP-default location instead of ours.
+ */
+export function extractAppliedPincode(json: string): string | null {
+  let state: unknown;
+  try {
+    state = JSON.parse(json);
+  } catch {
+    return null;
+  }
+  let found: string | null = null;
+  const walk = (n: unknown): void => {
+    if (found !== null || !n || typeof n !== 'object') return;
+    if (Array.isArray(n)) {
+      n.forEach(walk);
+      return;
+    }
+    const o = n as Record<string, unknown>;
+    if (
+      o.pincode !== undefined &&
+      (o.sellerCount !== undefined || o.singleSeller !== undefined || o.city !== undefined)
+    ) {
+      const p = String(o.pincode);
+      if (/^\d{6}$/.test(p)) {
+        found = p;
+        return;
+      }
+    }
+    for (const k of Object.keys(o)) walk(o[k]);
+  };
+  walk(state);
+  return found;
+}
+
+/**
  * Fetch localized price/MRP/stock for a pincode via Flipkart's page/fetch API.
  * Retries a few times: a transient failure here would otherwise let the parser
  * fall back to the IP-default price, and since the proxy IP's region varies
@@ -127,7 +165,11 @@ export async function fetchFlipkartPincodePricing(
       });
       if (res.statusCode === 200) {
         const pricing = extractApiPricing(res.body);
-        if (pricing) return { ...pricing, pincode };
+        // Only trust the price when Flipkart confirms it applied OUR pincode.
+        // If the resolved pincode differs (silently used the IP default) — or
+        // can't be confirmed — retry; never record an unverified price.
+        const applied = extractAppliedPincode(res.body);
+        if (pricing && applied === pincode) return { ...pricing, pincode };
       }
     } catch {
       // retry
