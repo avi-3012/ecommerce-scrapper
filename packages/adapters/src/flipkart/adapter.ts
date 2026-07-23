@@ -24,7 +24,11 @@ export class FlipkartAdapter implements MarketplaceAdapter {
       debug.proxySession = proxySession() ?? null;
       debug.exitIp = await resolveExitIp();
     }
-    const page = await this.fetchFn(canonicalUrl);
+    // The main page may be fetched by the browser tier (opts.pageFetch); the
+    // pincode price still comes from the page/fetch API below, so localisation
+    // is identical on both tiers.
+    const pageFetch = opts?.pageFetch ?? this.fetchFn;
+    const page = await pageFetch(canonicalUrl);
     if (debug) {
       debug.fetch = { finalUrl: page.url, bodyBytes: page.body.length, tier: page.tier };
     }

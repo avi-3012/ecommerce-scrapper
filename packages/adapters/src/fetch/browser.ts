@@ -25,6 +25,7 @@ export async function createBrowserFetch(): Promise<FetchFn | undefined> {
     chromium: {
       launch(opts: { headless: boolean; proxy?: PlaywrightProxy }): Promise<{
         newContext(opts?: object): Promise<{
+          addCookies(cookies: Array<{ name: string; value: string; url: string }>): Promise<void>;
           newPage(): Promise<{
             goto(url: string, opts: object): Promise<{ status(): number } | null>;
             content(): Promise<string>;
@@ -46,7 +47,7 @@ export async function createBrowserFetch(): Promise<FetchFn | undefined> {
   let pagesServed = 0;
   const proxy = playwrightProxy();
 
-  const fetchFn: FetchFn = async (url): Promise<RawPage> => {
+  const fetchFn: FetchFn = async (url, options): Promise<RawPage> => {
     if (!browser || pagesServed >= MAX_PAGES_PER_BROWSER) {
       await browser?.close().catch(() => undefined);
       // Route the browser tier through the residential proxy when configured (R-2).
@@ -58,6 +59,22 @@ export async function createBrowserFetch(): Promise<FetchFn | undefined> {
       viewport: { width: 1366, height: 768 },
     });
     try {
+      // Apply a caller-supplied cookie (Amazon's glow location cookie) so a
+      // browser-tier fetch is localised exactly like the HTTP tier. Without it,
+      // the browser would load the IP-default location and record a wrong price.
+      const cookieHeader = options?.headers?.cookie;
+      if (cookieHeader) {
+        const cookies = cookieHeader
+          .split(';')
+          .map((pair) => {
+            const eq = pair.indexOf('=');
+            return eq > 0
+              ? { name: pair.slice(0, eq).trim(), value: pair.slice(eq + 1).trim(), url }
+              : null;
+          })
+          .filter((c): c is { name: string; value: string; url: string } => c !== null);
+        if (cookies.length) await context.addCookies(cookies);
+      }
       const page = await context.newPage();
       const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
       pagesServed += 1;

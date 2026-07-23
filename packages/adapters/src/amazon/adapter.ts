@@ -25,12 +25,16 @@ export class AmazonAdapter implements MarketplaceAdapter {
 
   async fetch(canonicalUrl: string, opts?: FetchOptions): Promise<RawPage> {
     const debug = opts?.debug;
+    // The main page may be fetched by the browser tier (opts.pageFetch); the
+    // glow cookie is still minted and applied below, so localisation is
+    // identical on both tiers rather than bypassed on escalation.
+    const pageFetch = opts?.pageFetch ?? this.fetchFn;
     if (debug) {
       debug.proxySession = proxySession() ?? null;
       debug.exitIp = await resolveExitIp();
     }
     if (!opts?.pincode) {
-      const page = await this.fetchFn(canonicalUrl);
+      const page = await pageFetch(canonicalUrl);
       if (debug) {
         debug.fetch = { finalUrl: page.url, bodyBytes: page.body.length, tier: page.tier };
         debug.amazon = { resolvedLocation: amazonResolvedLocation(page.body) || null };
@@ -48,7 +52,7 @@ export class AmazonAdapter implements MarketplaceAdapter {
         if (debug) debug.amazon = { locationApplied: false, attempts: attempt + 1 };
         throw new CheckError('other', `Amazon location for pincode ${opts.pincode} unavailable`);
       }
-      const page = await this.fetchFn(canonicalUrl, { headers: { cookie } });
+      const page = await pageFetch(canonicalUrl, { headers: { cookie } });
       const resolvedLocation = amazonResolvedLocation(page.body);
       if (debug) {
         debug.fetch = { finalUrl: page.url, bodyBytes: page.body.length, tier: page.tier };

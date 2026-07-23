@@ -1,4 +1,5 @@
 import type { ExtractionTier, Marketplace, ProductSnapshot, ScrapeDebug } from '@pricepulse/shared';
+import type { FetchFn } from './fetch/http.js';
 
 /** Per-check fetch options threaded from user settings. */
 export interface FetchOptions {
@@ -10,6 +11,15 @@ export interface FetchOptions {
    * price, proxy session) for the per-check audit trail. Never load-bearing.
    */
   debug?: ScrapeDebug;
+  /**
+   * Override for the MAIN listing-page fetch (tier-2 escalation passes the
+   * headless-browser fetch here). Location handling — Flipkart's page/fetch API
+   * call, Amazon's glow cookie — is UNCHANGED and still runs, so a check that
+   * escalates to the browser is localised exactly like a tier-1 check. Absent ⇒
+   * the adapter's default tier-1 HTTP fetch. Never let the browser tier bypass
+   * localisation (that recorded the IP-default price and flapped alerts).
+   */
+  pageFetch?: FetchFn;
 }
 
 /** A fetched listing page before parsing. */

@@ -56,8 +56,17 @@ export async function performCheck(
 
   if (options.browserFetch && ESCALATABLE.has(tier1.error.reason)) {
     const tier2 = await attempt(async () => {
-      const page = await options.browserFetch!(canonicalUrl);
-      return adapter.parse({ ...page, tier: 'browser' });
+      // Route the browser fetch THROUGH the adapter, not around it: the adapter
+      // fetches the main page with the browser (dodging the tier-1 block) while
+      // still applying its location logic (Flipkart page/fetch API, Amazon glow
+      // cookie). Calling the browser fetch directly here used to skip that,
+      // recording the unlocalised IP-default price and flapping price alerts.
+      const page = await adapter.fetch(canonicalUrl, {
+        pincode: options.pincode,
+        debug,
+        pageFetch: options.browserFetch,
+      });
+      return adapter.parse(page);
     });
     if (tier2.ok) {
       return {
