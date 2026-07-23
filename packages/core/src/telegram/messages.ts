@@ -33,6 +33,8 @@ export const ALERT_TYPE_LABELS: Record<AlertType, string> = {
   threshold_drop: 'Price drop',
   price_change: 'Price changed',
   offer_change: 'Offer changed',
+  offer_added: 'New offer added',
+  offer_removed: 'Offer removed',
   back_in_stock: 'Back in stock',
   auto_paused: 'Monitoring paused',
   system_health: 'System health',
@@ -81,6 +83,30 @@ export const DEFAULT_TEMPLATES: Record<AlertType, string> = {
     '',
     '➕ New offers:',
     '{{addedOffers}}',
+    '',
+    '➖ Removed offers:',
+    '{{removedOffers}}',
+    '',
+    '🔗 {{link}}',
+    '⏰ {{time}}',
+  ].join('\n'),
+  offer_added: [
+    '{{emoji}} <b>{{typeLabel}}</b> — {{marketplace}}',
+    '📱 {{productName}}',
+    '',
+    'Price:   {{price}}',
+    '',
+    '➕ New offers:',
+    '{{addedOffers}}',
+    '',
+    '🔗 {{link}}',
+    '⏰ {{time}}',
+  ].join('\n'),
+  offer_removed: [
+    '{{emoji}} <b>{{typeLabel}}</b> — {{marketplace}}',
+    '📱 {{productName}}',
+    '',
+    'Price:   {{price}}',
     '',
     '➖ Removed offers:',
     '{{removedOffers}}',
@@ -156,6 +182,20 @@ export function templateVariablesFor(type: AlertType): TemplateVariable[] {
       return [...COMMON_VARS, ...PRICE_VARS];
     case 'offer_change':
       return [...COMMON_VARS, ...OFFER_VARS];
+    case 'offer_added':
+      return [
+        ...COMMON_VARS,
+        { name: 'price', description: 'Current price' },
+        { name: 'addedOffers', description: 'Offers that appeared' },
+        { name: 'newOffers', description: 'Current offers (bulleted list)' },
+      ];
+    case 'offer_removed':
+      return [
+        ...COMMON_VARS,
+        { name: 'price', description: 'Current price' },
+        { name: 'removedOffers', description: 'Offers that disappeared' },
+        { name: 'newOffers', description: 'Current offers (bulleted list)' },
+      ];
     case 'back_in_stock':
       return [...COMMON_VARS, { name: 'price', description: 'Current price' }];
     case 'auto_paused':
@@ -179,6 +219,8 @@ const EMOJI: Record<AlertType, string> = {
   threshold_drop: '📉',
   price_change: '↕️',
   offer_change: '🏷️',
+  offer_added: '🏷️',
+  offer_removed: '🏷️',
   back_in_stock: '📦',
   auto_paused: '⚠️',
   system_health: '🩺',
@@ -322,6 +364,24 @@ export function sampleAlertInput(type: AlertType): AlertMessageInput {
         ...base,
         oldValue: { offers: [offers[0]!, offers[1]!, offers[2]!] },
         newValue: { offers: [offers[0]!, offers[1]!, ...added], added, removed, price: 69900 },
+      };
+    }
+    case 'offer_added': {
+      const added: Offer[] = [
+        { type: 'cashback', description: 'Flipkart Axis — Debit Card • Cashback — ₹750 off' },
+      ];
+      return {
+        ...base,
+        oldValue: { offers },
+        newValue: { offers: [...offers, ...added], added, price: 69900 },
+      };
+    }
+    case 'offer_removed': {
+      const removed: Offer[] = [offers[2]!];
+      return {
+        ...base,
+        oldValue: { offers },
+        newValue: { offers: [offers[0]!, offers[1]!], removed, price: 69900 },
       };
     }
     case 'back_in_stock':

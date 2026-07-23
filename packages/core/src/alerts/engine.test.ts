@@ -36,7 +36,8 @@ const allOn: AlertToggles = {
   alertTargetPrice: true,
   alertThresholdDrop: true,
   alertAnyChange: true,
-  alertOfferChange: true,
+  alertOfferAdded: true,
+  alertOfferRemoved: true,
   alertBackInStock: true,
 };
 
@@ -167,20 +168,35 @@ describe('any-change (FR-3.3)', () => {
   });
 });
 
-describe('offer change (FR-3.4)', () => {
+describe('offer change (FR-3.4) — split into added / removed', () => {
   const bankOffer = normalizeOffers(['Bank Offer: 10% off HDFC Cards']);
+  const otherOffer = normalizeOffers(['Coupon: Flat ₹500 off']);
 
-  it('fires when an offer appears with no price movement (UC-5)', () => {
+  it('fires offer_added when an offer appears, carrying only the added offers', () => {
     const r = evaluateAlerts(prev(1000), snap(1000, { offers: bankOffer }), rules(), allOn);
-    expect(types(r)).toEqual(['offer_change']);
-    const payload = r.events[0]?.newValue as { added: unknown[]; removed: unknown[] };
+    expect(types(r)).toEqual(['offer_added']);
+    const payload = r.events[0]?.newValue as { added: unknown[]; removed?: unknown[] };
     expect(payload.added).toHaveLength(1);
-    expect(payload.removed).toHaveLength(0);
+    // The removed side is not part of an addition alert.
+    expect(payload.removed).toBeUndefined();
   });
 
-  it('fires when an offer disappears', () => {
+  it('fires offer_removed when an offer disappears, carrying only the removed offers', () => {
     const r = evaluateAlerts(prev(1000, { offers: bankOffer }), snap(1000), rules(), allOn);
-    expect(types(r)).toEqual(['offer_change']);
+    expect(types(r)).toEqual(['offer_removed']);
+    const payload = r.events[0]?.newValue as { removed: unknown[]; added?: unknown[] };
+    expect(payload.removed).toHaveLength(1);
+    expect(payload.added).toBeUndefined();
+  });
+
+  it('fires BOTH when one offer is added and another removed in the same check', () => {
+    const r = evaluateAlerts(
+      prev(1000, { offers: bankOffer }),
+      snap(1000, { offers: otherOffer }),
+      rules(),
+      allOn,
+    );
+    expect(types(r).sort()).toEqual(['offer_added', 'offer_removed']);
   });
 
   it('is silent when offers are unchanged (order-insensitive)', () => {
@@ -193,12 +209,29 @@ describe('offer change (FR-3.4)', () => {
     expect(r.events).toHaveLength(0);
   });
 
-  it('respects the toggle', () => {
-    const r = evaluateAlerts(prev(1000), snap(1000, { offers: bankOffer }), rules(), {
+  it('respects each toggle independently', () => {
+    // Added off, removed on: an addition-only change is silent.
+    const addedOff = evaluateAlerts(prev(1000), snap(1000, { offers: bankOffer }), rules(), {
       ...allOn,
-      alertOfferChange: false,
+      alertOfferAdded: false,
     });
-    expect(r.events).toHaveLength(0);
+    expect(addedOff.events).toHaveLength(0);
+
+    // Same change with removed off but added on still fires the addition.
+    const removedOff = evaluateAlerts(prev(1000), snap(1000, { offers: bankOffer }), rules(), {
+      ...allOn,
+      alertOfferRemoved: false,
+    });
+    expect(types(removedOff)).toEqual(['offer_added']);
+
+    // A both-sided change with added off yields only the removal.
+    const both = evaluateAlerts(
+      prev(1000, { offers: bankOffer }),
+      snap(1000, { offers: otherOffer }),
+      rules(),
+      { ...allOn, alertOfferAdded: false },
+    );
+    expect(types(both)).toEqual(['offer_removed']);
   });
 });
 
@@ -264,10 +297,10 @@ describe('null price (out of stock)', () => {
 });
 
 describe('multi-condition checks and determinism', () => {
-  it('one drop can fire target + threshold + offer change as distinct events', () => {
+  it('one drop can fire target + threshold + offer-added as distinct events', () => {
     const offers = normalizeOffers(['Apply ₹500 coupon']);
     const r = evaluateAlerts(prev(1000), snap(900, { offers }), rules({ targetPrice: 950 }), allOn);
-    expect(types(r).sort()).toEqual(['offer_change', 'target_price', 'threshold_drop']);
+    expect(types(r).sort()).toEqual(['offer_added', 'target_price', 'threshold_drop']);
   });
 
   it('is deterministic: same inputs, same outputs', () => {

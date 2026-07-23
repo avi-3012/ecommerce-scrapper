@@ -30,7 +30,10 @@ export interface AlertToggles {
   alertTargetPrice: boolean;
   alertThresholdDrop: boolean;
   alertAnyChange: boolean;
-  alertOfferChange: boolean;
+  /** Offers that appeared since the last check. */
+  alertOfferAdded: boolean;
+  /** Offers that disappeared since the last check. */
+  alertOfferRemoved: boolean;
   alertBackInStock: boolean;
 }
 
@@ -121,13 +124,28 @@ export function evaluateAlerts(
   }
 
   // ── Offer change (FR-3.4) — independent of price movement ──
-  if (previous && toggles.alertOfferChange && previous.offersHash !== offersHash(snapshot.offers)) {
+  // Additions and removals are separate alerts with independent toggles, so a
+  // check that both adds and removes an offer fires up to two alerts, each
+  // carrying only its own side of the diff.
+  if (
+    previous &&
+    (toggles.alertOfferAdded || toggles.alertOfferRemoved) &&
+    previous.offersHash !== offersHash(snapshot.offers)
+  ) {
     const { added, removed } = diffOffers(previous.offers, snapshot.offers);
-    if (added.length > 0 || removed.length > 0) {
+    if (added.length > 0 && toggles.alertOfferAdded) {
       events.push({
-        type: 'offer_change',
+        type: 'offer_added',
         oldValue: { offers: previous.offers },
-        newValue: { offers: snapshot.offers, added, removed, price },
+        newValue: { offers: snapshot.offers, added, price },
+        changePct: null,
+      });
+    }
+    if (removed.length > 0 && toggles.alertOfferRemoved) {
+      events.push({
+        type: 'offer_removed',
+        oldValue: { offers: previous.offers },
+        newValue: { offers: snapshot.offers, removed, price },
         changePct: null,
       });
     }

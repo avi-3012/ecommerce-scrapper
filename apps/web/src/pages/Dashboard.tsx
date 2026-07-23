@@ -198,6 +198,14 @@ export function alertSummary(a: AlertRow): string {
       return `changed ${a.changePct}% to ${inr(nv.price as number)}`;
     case 'offer_change':
       return 'offers changed';
+    case 'offer_added': {
+      const added = (nv.added as unknown[] | undefined)?.length ?? 0;
+      return `${added} new offer${added === 1 ? '' : 's'}`;
+    }
+    case 'offer_removed': {
+      const removed = (nv.removed as unknown[] | undefined)?.length ?? 0;
+      return `${removed} offer${removed === 1 ? '' : 's'} removed`;
+    }
     case 'back_in_stock':
       return 'is back in stock';
     case 'auto_paused':

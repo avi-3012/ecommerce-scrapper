@@ -20,6 +20,22 @@ describe('template variables', () => {
     expect(vars.time).toBe('01 Jul 2026, 01:51 AM');
   });
 
+  it('offer_added renders only the added offers, never the removed side', () => {
+    const msg = renderAlertMessage(sampleAlertInput('offer_added'));
+    expect(msg).toContain('New offer added');
+    expect(msg).toContain('➕ New offers:');
+    expect(msg).toContain('Flipkart Axis — Debit Card • Cashback — ₹750 off');
+    expect(msg).not.toContain('➖ Removed offers:');
+  });
+
+  it('offer_removed renders only the removed offers, never the added side', () => {
+    const msg = renderAlertMessage(sampleAlertInput('offer_removed'));
+    expect(msg).toContain('Offer removed');
+    expect(msg).toContain('➖ Removed offers:');
+    expect(msg).toContain('Paytm — UPI • Cashback — ₹50 off');
+    expect(msg).not.toContain('➕ New offers:');
+  });
+
   it('added/removed offer lists say "None" when empty', () => {
     const vars = buildAlertVariables({
       type: 'offer_change',

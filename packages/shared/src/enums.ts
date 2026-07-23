@@ -21,12 +21,22 @@ export const ALERT_TYPES = [
   'target_price',
   'threshold_drop',
   'price_change',
+  // Deprecated: superseded by offer_added / offer_removed. Kept so historical
+  // alerts still resolve a label/template; never emitted for new checks.
   'offer_change',
+  'offer_added',
+  'offer_removed',
   'back_in_stock',
   'auto_paused',
   'system_health',
 ] as const;
 export type AlertType = (typeof ALERT_TYPES)[number];
+
+/**
+ * The offer alert that is no longer generated. It stays in the enum for
+ * historical rows but is hidden from the settings/template editor UI.
+ */
+export const DEPRECATED_ALERT_TYPES: readonly AlertType[] = ['offer_change'];
 
 export const DELIVERY_STATUSES = [
   'pending',

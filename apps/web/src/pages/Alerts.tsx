@@ -14,6 +14,8 @@ const TYPE_LABELS: Record<string, string> = {
   threshold_drop: '📉 Price drop',
   price_change: '↕️ Price change',
   offer_change: '🏷️ Offer change',
+  offer_added: '🏷️ New offer',
+  offer_removed: '🏷️ Offer removed',
   back_in_stock: '📦 Back in stock',
   auto_paused: '⚠️ Auto-paused',
   system_health: '🩺 System health',

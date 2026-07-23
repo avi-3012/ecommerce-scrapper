@@ -267,7 +267,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     ]);
 
     const drops = alerts.filter((a) => a.type === 'threshold_drop' || a.type === 'target_price');
-    const offerChanges = alerts.filter((a) => a.type === 'offer_change').length;
+    const offerChanges = alerts.filter(
+      (a) => a.type === 'offer_added' || a.type === 'offer_removed' || a.type === 'offer_change',
+    ).length;
     const stockChanges = alerts.filter((a) => a.type === 'back_in_stock').length;
     const nearLowThreshold = 1 + Number(settings.nearLowThresholdPct) / 100;
     const atLow = nearLow.filter(

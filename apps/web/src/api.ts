@@ -174,7 +174,8 @@ export interface SettingsView {
   alertTargetPrice: boolean;
   alertThresholdDrop: boolean;
   alertAnyChange: boolean;
-  alertOfferChange: boolean;
+  alertOfferAdded: boolean;
+  alertOfferRemoved: boolean;
   alertBackInStock: boolean;
   timezone: string;
   telegramBotTokenSet: boolean;

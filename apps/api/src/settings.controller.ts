@@ -20,7 +20,8 @@ const patchSchema = z.object({
   alertTargetPrice: z.boolean().optional(),
   alertThresholdDrop: z.boolean().optional(),
   alertAnyChange: z.boolean().optional(),
-  alertOfferChange: z.boolean().optional(),
+  alertOfferAdded: z.boolean().optional(),
+  alertOfferRemoved: z.boolean().optional(),
   alertBackInStock: z.boolean().optional(),
   timezone: z.string().optional(),
   /** Plaintext in, encrypted at rest; null clears it. */

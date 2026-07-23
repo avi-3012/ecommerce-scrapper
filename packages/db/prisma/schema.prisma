@@ -43,7 +43,11 @@ enum AlertType {
   target_price
   threshold_drop
   price_change
+  // Deprecated: superseded by offer_added / offer_removed. Retained so historical
+  // alert rows still map; never emitted for new checks.
   offer_change
+  offer_added
+  offer_removed
   back_in_stock
   auto_paused
   system_health
@@ -310,7 +314,9 @@ model Settings {
   alertTargetPrice   Boolean @default(true) @map("alert_target_price")
   alertThresholdDrop Boolean @default(true) @map("alert_threshold_drop")
   alertAnyChange     Boolean @default(false) @map("alert_any_change")
-  alertOfferChange   Boolean @default(true) @map("alert_offer_change")
+  // Offer alerts are split so additions and removals can be toggled independently.
+  alertOfferAdded    Boolean @default(true) @map("alert_offer_added")
+  alertOfferRemoved  Boolean @default(true) @map("alert_offer_removed")
   alertBackInStock   Boolean @default(true) @map("alert_back_in_stock")
 
   // Milestone 3 hygiene (schema-ready now)

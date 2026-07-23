@@ -1,6 +1,6 @@
 import { Body, Controller, Get, HttpCode, Inject, Post, Put } from '@nestjs/common';
 import { z } from 'zod';
-import { ALERT_TYPES } from '@pricepulse/shared';
+import { ALERT_TYPES, DEPRECATED_ALERT_TYPES } from '@pricepulse/shared';
 import {
   ALERT_TYPE_LABELS,
   DEFAULT_TEMPLATES,
@@ -35,7 +35,9 @@ export class NotificationsController {
   async templates() {
     const { settings } = await getUserWithSettings(this.prisma);
     const custom = (settings.notificationTemplates ?? {}) as Record<string, string>;
-    return ALERT_TYPES.map((type) => ({
+    // Deprecated types (offer_change) keep a template for historical rendering
+    // but are not offered for editing.
+    return ALERT_TYPES.filter((type) => !DEPRECATED_ALERT_TYPES.includes(type)).map((type) => ({
       type,
       label: ALERT_TYPE_LABELS[type],
       template: custom[type] ?? '', // '' ⇒ using the default

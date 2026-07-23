@@ -57,7 +57,8 @@ function SettingsForm({
     alertTargetPrice: settings.alertTargetPrice,
     alertThresholdDrop: settings.alertThresholdDrop,
     alertAnyChange: settings.alertAnyChange,
-    alertOfferChange: settings.alertOfferChange,
+    alertOfferAdded: settings.alertOfferAdded,
+    alertOfferRemoved: settings.alertOfferRemoved,
     alertBackInStock: settings.alertBackInStock,
     monitoringPaused: settings.monitoringPaused,
   });
@@ -218,9 +219,14 @@ function SettingsForm({
             'Any rise or drop, however small. Off by default — can be noisy.',
           )}
           {toggleRow(
-            'alertOfferChange',
-            'Offer changes',
-            'When bank offers or coupons appear or disappear, even if the price is unchanged.',
+            'alertOfferAdded',
+            'New offer added',
+            'When a bank offer or coupon appears, even if the price is unchanged. Shows only the added offers.',
+          )}
+          {toggleRow(
+            'alertOfferRemoved',
+            'Offer removed',
+            'When a bank offer or coupon disappears, even if the price is unchanged. Shows only the removed offers.',
           )}
           {toggleRow(
             'alertBackInStock',

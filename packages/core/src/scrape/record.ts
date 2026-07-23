@@ -105,7 +105,8 @@ export async function recordCheck(
       alertTargetPrice: settings.alertTargetPrice,
       alertThresholdDrop: settings.alertThresholdDrop,
       alertAnyChange: settings.alertAnyChange,
-      alertOfferChange: settings.alertOfferChange,
+      alertOfferAdded: settings.alertOfferAdded,
+      alertOfferRemoved: settings.alertOfferRemoved,
       alertBackInStock: settings.alertBackInStock,
     },
   );
@@ -118,7 +119,7 @@ export async function recordCheck(
   // almost always a transient extraction miss (especially Flipkart's
   // client-rendered offers) — not every offer genuinely ending at once. Treat it
   // as "offers not read this cycle": keep the last known offers and suppress the
-  // spurious all-removed offer_change.
+  // spurious all-removed offer alert.
   // An out-of-stock listing is the same situation by another route: marketplaces
   // stop rendering promotions on an unbuyable item, so its offers are absent or
   // truncated rather than genuinely withdrawn. Freeze the last known offers
@@ -127,7 +128,7 @@ export async function recordCheck(
   const offersUnreliable =
     (snapshot.offers.length === 0 || outOfStock) && previous !== null && previous.offers.length > 0;
   const events = offersUnreliable
-    ? rawEvents.filter((event) => event.type !== 'offer_change')
+    ? rawEvents.filter((event) => event.type !== 'offer_added' && event.type !== 'offer_removed')
     : rawEvents;
   const effectiveOffers = offersUnreliable && previous ? previous.offers : snapshot.offers;
 

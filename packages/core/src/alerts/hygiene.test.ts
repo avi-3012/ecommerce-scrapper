@@ -36,12 +36,16 @@ describe('cooldown exemptions (WP-3.1 rule 1)', () => {
   it.each(['auto_paused', 'back_in_stock', 'system_health'] as const)('%s is exempt', (type) => {
     expect(isCooldownExempt(type)).toBe(true);
   });
-  it.each(['target_price', 'threshold_drop', 'price_change', 'offer_change'] as const)(
-    '%s is subject to cooldown',
-    (type) => {
-      expect(isCooldownExempt(type)).toBe(false);
-    },
-  );
+  it.each([
+    'target_price',
+    'threshold_drop',
+    'price_change',
+    'offer_change',
+    'offer_added',
+    'offer_removed',
+  ] as const)('%s is subject to cooldown', (type) => {
+    expect(isCooldownExempt(type)).toBe(false);
+  });
 });
 
 describe('digest due (FR-3.10)', () => {
