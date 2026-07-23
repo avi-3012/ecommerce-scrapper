@@ -8,11 +8,18 @@ import type { RawOffer } from '../offers.js';
  * `window.__INITIAL_STATE__` JSON blob. Each offer is a `NepOffers` object with
  * an `offerTitle` (the bank/wallet, e.g. "Flipkart Axis", or a category like
  * "Bank offers"), a subtitle, and an amount. We parse that blob and pull out the
- * individual offers.
+ * individual offers from two sections:
  *
- * The same blob also carries the EMI installment table (one row per bank, "₹X
- * off/m (N months)") — those are payment plans, not promotions, so they are
- * excluded to keep offer-change alerts meaningful.
+ *  - "Bank offers" (PBO): the card/UPI instant discounts and cashbacks.
+ *  - "EMI offers" (PBO_EMI): per-bank EMI offers that carry a DISCOUNT (e.g.
+ *    "HDFC Bank — Credit Card • ₹2,000 off"). An EMI row is identified by its
+ *    `tenure` field; its promotional value lives in the SUBTITLE, while its
+ *    `metaInfoLabelValue` is the monthly installment ("₹X off/m (N months)").
+ *
+ * A plain EMI installment plan — an EMI row whose subtitle carries no discount,
+ * only the monthly figure — is a payment option, not a promotion, so it is
+ * excluded: including the installment amount (which tracks the price and tenure)
+ * would flap offer-change alerts on every price move.
  */
 
 /** Isolate the `window.__INITIAL_STATE__` object via a string-aware brace scan. */
@@ -95,6 +102,48 @@ function firstAmount(node: unknown): string | null {
 
 const clean = (s: string): string => s.replace(/\s+/g, ' ').trim();
 
+/** A candidate offer plus the token used to dedupe it within the page. */
+interface OfferCandidate {
+  raw: RawOffer;
+  key: string;
+}
+
+/**
+ * A "Bank offers" (or exchange) row. A real offer has a concrete amount or
+ * genuine promotional wording; some NepOffers are just category headers whose
+ * subtitle is a UI prompt ("Change pincode to exchange item") and carry no
+ * offer, so they are dropped even though they have an offerType.
+ */
+function bankOffer(node: NepOffer & Record<string, unknown>, sub: string): OfferCandidate | null {
+  let amount = clean(firstAmount(node) ?? '');
+  // The EMI installment table ("₹X off/m (N months)") is handled separately; a
+  // bank row that somehow surfaces one is a payment plan, not a promotion.
+  if (/off\/m|\/month|\(\d+\s*months?\)/i.test(amount)) return null;
+  if (/^₹\s*0\b|^0\b/.test(amount)) amount = ''; // ₹0 / placeholder = no real value
+  const hasValue = amount !== '' || /cashback|discount|instant|flat|\d+\s*%|\boff\b/i.test(sub);
+  if (!hasValue) return null;
+  const description = [node.offerTitle, sub, amount].filter(Boolean).join(' — ');
+  const label = node.offerType ? CATEGORY_LABEL[node.offerType] : undefined;
+  return { raw: label ? { label, description } : { description }, key: amount };
+}
+
+/**
+ * A per-bank EMI row from the "EMI offers" section. Only rows that carry a
+ * DISCOUNT (a rupee/percent value in the subtitle, e.g. "Credit Card • ₹2,000
+ * off") are real offers; a row whose subtitle is just the card type is a plain
+ * installment plan and is dropped. The monthly installment amount is never used
+ * — it tracks the price and would flap the offer set on every price move.
+ */
+function emiOffer(node: NepOffer & Record<string, unknown>, sub: string): OfferCandidate | null {
+  const hasDiscount = /₹\s?[\d,]+|\d+\s*%/.test(sub);
+  if (!hasDiscount) return null;
+  const description = [node.offerTitle, sub].filter(Boolean).join(' — ');
+  // Prefer the "No Cost EMI" bucket when the copy says so; otherwise a plain
+  // discounted EMI offer.
+  const label = /no[\s-]?cost/i.test(`${node.offerTitle} ${sub}`) ? 'No Cost EMI' : 'EMI offer';
+  return { raw: { label, description }, key: sub };
+}
+
 /** Extract the individual promotional offers from a Flipkart page's state JSON. */
 export function extractFlipkartOffers(html: string): RawOffer[] {
   const state = extractInitialState(html);
@@ -112,21 +161,14 @@ export function extractFlipkartOffers(html: string): RawOffer[] {
     const node = n as NepOffer & Record<string, unknown>;
     if (node.type === 'NepOffers' && node.offerTitle) {
       const sub = clean(firstText(node.offerSubTitleRC) ?? '');
-      let amount = clean(firstAmount(node) ?? '');
-      const isEmiPlan = /off\/m|\/month|\(\d+\s*months?\)/i.test(amount);
-      if (/^₹\s*0\b|^0\b/.test(amount)) amount = ''; // ₹0 / placeholder = no real value
-      // A real offer has a concrete amount or genuine promotional wording. Some
-      // NepOffers are just category headers whose subtitle is a UI prompt
-      // ("Or check these EMI plans", "Change pincode to exchange item") — those
-      // carry no offer and must be dropped, even though they have an offerType.
-      const hasValue = amount !== '' || /cashback|discount|instant|flat|\d+\s*%|\boff\b/i.test(sub);
-      if (!isEmiPlan && hasValue) {
-        const description = [node.offerTitle, sub, amount].filter(Boolean).join(' — ');
-        const label = node.offerType ? CATEGORY_LABEL[node.offerType] : undefined;
-        const key = `${node.offerTitle}|${amount}`.toLowerCase();
+      // A per-bank EMI row carries a `tenure` field; its promotional value is the
+      // discount in the SUBTITLE, not the monthly installment in the amount.
+      const entry = 'tenure' in node ? emiOffer(node, sub) : bankOffer(node, sub);
+      if (entry) {
+        const key = `${node.offerTitle}|${entry.key}`.toLowerCase();
         if (!seen.has(key)) {
           seen.add(key);
-          offers.push(label ? { label, description } : { description });
+          offers.push(entry.raw);
         }
       }
     }
@@ -134,5 +176,7 @@ export function extractFlipkartOffers(html: string): RawOffer[] {
   };
 
   walk(state);
-  return offers.slice(0, 25); // guard against a runaway blob
+  // Guard against a runaway blob. Two sections (bank + EMI) now contribute, so
+  // the cap is generous enough not to truncate a genuinely offer-rich listing.
+  return offers.slice(0, 40);
 }

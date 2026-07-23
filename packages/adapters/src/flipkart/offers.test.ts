@@ -20,6 +20,19 @@ const nepOffer = (
   action: { tracking: { metaInfoLabelValue: amount } },
 });
 
+/**
+ * A per-bank row from the "EMI offers" section: identified by its `tenure`
+ * field, its discount in the subtitle, and the monthly installment in the
+ * amount (which must NOT end up in the offer).
+ */
+const emiRow = (offerTitle: string, contentValue: string, monthly: string): unknown => ({
+  type: 'NepOffers',
+  offerTitle,
+  tenure: '(24 months)',
+  offerSubTitleRC: { value: { contentList: [{ contentType: 'TEXT', contentValue }] } },
+  action: { tracking: { metaInfoLabelValue: monthly } },
+});
+
 describe('extractInitialState', () => {
   it('isolates the state object even with sibling script statements', () => {
     const html = `<script>var domain="x";window.__INITIAL_STATE__ = {"a":{"b":"}{"}};var y=1;</script>`;
@@ -45,15 +58,40 @@ describe('extractFlipkartOffers', () => {
     expect(descriptions).toContain('Bank offers — ₹ 5,795 off');
   });
 
-  it('excludes EMI installment plans (payment plans, not promotions)', () => {
+  it('captures EMI offers that carry a discount, using the subtitle not the installment', () => {
     const html = stateHtml([
+      emiRow('HDFC Bank', 'Credit Card • ₹2,000 off', '₹ 8,209 off/m (12 months)'),
+      emiRow('ICICI Bank', 'Credit Card • ₹1,250 off', '₹ 4,443 off/m (24 months)'),
+    ]);
+    const offers = extractFlipkartOffers(html);
+    const descriptions = offers.map((o) => o.description);
+    expect(descriptions).toEqual([
+      'HDFC Bank — Credit Card • ₹2,000 off',
+      'ICICI Bank — Credit Card • ₹1,250 off',
+    ]);
+    // The monthly installment must never leak into the offer.
+    expect(descriptions.join(' ')).not.toMatch(/off\/m|months/);
+    expect(offers.every((o) => o.label === 'EMI offer')).toBe(true);
+  });
+
+  it('excludes plain EMI installment plans (no discount in the subtitle)', () => {
+    const html = stateHtml([
+      // Real EMI rows with only a monthly figure and no discount — payment plans.
+      emiRow('Kotak Mahindra Bank', 'Credit Card', '₹ 4,505 off/m (24 months)'),
+      emiRow('SBI', 'Credit Card', '₹ 4,549 off/m (24 months)'),
+      // A legacy non-tenure row expressing an installment is still excluded.
       nepOffer('HDFC Bank', 'Credit Card', '₹ 2,100 off/m (36 months)'),
-      nepOffer('ICICI Bank', 'Credit Card', '₹ 2,884 off/m (24 months)'),
       nepOffer('Flipkart Axis', 'Credit Card • Includes cashback', '₹ 5795 off'),
     ]);
     const offers = extractFlipkartOffers(html);
     expect(offers).toHaveLength(1);
     expect(offers[0]?.description).toContain('Flipkart Axis');
+  });
+
+  it('labels an EMI offer whose copy says "No Cost EMI" as no_cost_emi', () => {
+    const html = stateHtml([emiRow('HDFC Bank', 'No Cost EMI • ₹3,000 off', '₹ 5,000 /m')]);
+    const offers = extractFlipkartOffers(html);
+    expect(offers[0]?.label).toBe('No Cost EMI');
   });
 
   it('drops vague category headers with a UI-prompt subtitle and no amount', () => {

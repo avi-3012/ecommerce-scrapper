@@ -40,6 +40,15 @@ describe('normalizeOfferCards (label-hinted classification)', () => {
     ]);
     expect(offers.map((o) => o.type).sort()).toEqual(['bank_offer', 'cashback', 'no_cost_emi']);
   });
+
+  it('routes an "EMI offer"-labelled discount to the emi category, not bank_offer', () => {
+    // The description ("Credit Card • ₹2,000 off") would classify as bank_offer
+    // on its own; the label makes it a distinct EMI offer.
+    const offers = normalizeOfferCards([
+      { label: 'EMI offer', description: 'HDFC Bank — Credit Card • ₹2,000 off' },
+    ]);
+    expect(offers.map((o) => o.type)).toEqual(['emi']);
+  });
 });
 
 describe('offersHash stability rules (FR-3.4 primitive)', () => {

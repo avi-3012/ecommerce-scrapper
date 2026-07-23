@@ -187,6 +187,7 @@ export function Badge({
 const OFFER_TONE: Record<OfferType, Tone> = {
   bank_offer: 'info',
   no_cost_emi: 'brand',
+  emi: 'brand',
   cashback: 'success',
   coupon: 'warning',
   exchange: 'neutral',

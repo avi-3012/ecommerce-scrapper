@@ -17,6 +17,7 @@ import type { Offer, OfferType } from '@pricepulse/shared';
 // so it is matched first, before the keyword fallback.
 const LABEL_PREFIX: Array<[OfferType, RegExp]> = [
   ['no_cost_emi', /^\s*no[\s-]?cost\s*emi\b/i],
+  ['emi', /^\s*emi( offers?)?\b/i],
   ['bank_offer', /^\s*bank offer\b/i],
   ['cashback', /^\s*cash\s?back\b/i],
   ['coupon', /^\s*coupon\b/i],

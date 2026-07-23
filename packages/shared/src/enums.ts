@@ -79,6 +79,9 @@ export type PriorityTier = (typeof PRIORITY_TIERS)[number];
 export const OFFER_TYPES = [
   'bank_offer',
   'no_cost_emi',
+  // Bank/card EMI offers that carry a discount (Flipkart's "EMI offers" section),
+  // distinct from genuinely-interest-free "No Cost EMI".
+  'emi',
   'cashback',
   'coupon',
   'exchange',
@@ -91,6 +94,7 @@ export type OfferType = (typeof OFFER_TYPES)[number];
 export const OFFER_TYPE_LABELS: Record<OfferType, string> = {
   bank_offer: 'Bank Offer',
   no_cost_emi: 'No Cost EMI',
+  emi: 'EMI Offer',
   cashback: 'Cashback',
   coupon: 'Coupon',
   exchange: 'Exchange',
