@@ -20,6 +20,7 @@ import {
   pauseProduct,
   previewUrl,
   registerProduct,
+  resumeAllProducts,
   resumeProduct,
 } from '@pricepulse/core';
 import type { PreviewResult } from '@pricepulse/core';
@@ -378,6 +379,14 @@ export class ProductsController {
   async checkAll() {
     await this.jobs.enqueueCheckAll();
     return { queued: true };
+  }
+
+  /** Recovery after a systemic outage: resume every paused product at once. */
+  @Post('resume-all')
+  @HttpCode(200)
+  async resumeAll() {
+    const resumed = await resumeAllProducts(this.prisma);
+    return { resumed };
   }
 
   /**

@@ -83,6 +83,18 @@ export function ProductsPage(): JSX.Element {
     onSettled: invalidate,
   });
 
+  const resumeAll = useMutation({
+    mutationFn: () => api<{ resumed: number }>('/products/resume-all', { method: 'POST' }),
+    onSuccess: ({ resumed }) =>
+      toast.success(
+        resumed > 0
+          ? `Resumed ${resumed} paused product${resumed === 1 ? '' : 's'}.`
+          : 'No paused products.',
+      ),
+    onError: (err) => toast.error(errorMessage(err)),
+    onSettled: invalidate,
+  });
+
   const remove = useMutation({
     mutationFn: (id: string) => api(`/products/${id}?confirm=true`, { method: 'DELETE' }),
     onSuccess: () => toast.success('Product deleted.'),
@@ -119,6 +131,14 @@ export function ProductsPage(): JSX.Element {
           Products {data ? <span className="text-fg-subtle">({data.total})</span> : ''}
         </h1>
         <div className="flex gap-2">
+          <Button
+            variant="secondary"
+            icon={Play}
+            loading={resumeAll.isPending}
+            onClick={() => resumeAll.mutate()}
+          >
+            Resume all
+          </Button>
           <Button
             variant="secondary"
             icon={RefreshCw}

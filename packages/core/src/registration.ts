@@ -162,6 +162,21 @@ export async function resumeProduct(prisma: PrismaClient, id: string): Promise<P
   });
 }
 
+/**
+ * Bulk-resume every paused product (auto- or user-paused) — the recovery path
+ * after a systemic outage (e.g. an expired proxy) auto-pauses the whole
+ * catalogue. Clears failure counters; the scheduler's own per-marketplace
+ * batching and pacing spread the first checks, so this won't stampede.
+ * Returns how many were resumed.
+ */
+export async function resumeAllProducts(prisma: PrismaClient): Promise<number> {
+  const { count } = await prisma.product.updateMany({
+    where: { status: { in: ['paused_auto', 'paused_user'] } },
+    data: { status: 'active', consecutiveFailures: 0, nextCheckAt: new Date() },
+  });
+  return count;
+}
+
 /** What deletion destroys — shown in the FR-1.6 confirmation step. */
 export async function deletionImpact(
   prisma: PrismaClient,
