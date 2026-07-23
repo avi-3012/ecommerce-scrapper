@@ -23,10 +23,50 @@ const UA =
 export const FLIPKART_PINCODE_MARKER = 'pp-flipkart-pincode';
 
 export interface PincodePricing {
-  price: number;
+  /** Null when the listing is not buyable — an out-of-stock item has no price. */
+  price: number | null;
   mrp: number | null;
   stockStatus: 'in_stock' | 'out_of_stock' | 'unknown';
   pincode: string;
+}
+
+/**
+ * Flipkart's own buyability verdict for the selected listing, read from the
+ * authoritative `pageContext…psi.pls` node.
+ *
+ * This is what distinguishes "we failed to localize the price" from "there is
+ * no price to localize". Flipkart populates the delivery/pincode component
+ * ONLY for a buyable listing: an out-of-stock item comes back with
+ * `pincodeComponent.value: null`, so the pincode echo we verify against is
+ * simply absent — which is a statement about stock, not a scrape failure.
+ */
+export interface ListingAvailability {
+  /** Flipkart's buyability flag for this listing. */
+  isAvailable: boolean | null;
+  /** IN_STOCK / OUT_OF_STOCK / COMING_SOON / … */
+  availabilityStatus: string | null;
+  /** Why it isn't buyable, when stated (e.g. "NotAvailable", "OTHERS"). */
+  unserviceabilityReason: string | null;
+  /** Listing lifecycle, e.g. "current", "comingback". */
+  listingState: string | null;
+}
+
+const NO_AVAILABILITY: ListingAvailability = {
+  isAvailable: null,
+  availabilityStatus: null,
+  unserviceabilityReason: null,
+  listingState: null,
+};
+
+const UNBUYABLE_STATUS = /OUT_OF_STOCK|SOLD_OUT|UNSERVICEABLE|COMING_SOON/i;
+
+/** Whether Flipkart says this listing cannot be bought right now. */
+export function isUnbuyable(availability: ListingAvailability): boolean {
+  if (availability.isAvailable === false) return true;
+  return (
+    availability.availabilityStatus !== null &&
+    UNBUYABLE_STATUS.test(availability.availabilityStatus)
+  );
 }
 
 /**
@@ -41,6 +81,10 @@ export interface PincodeFetchResult {
   applied: string | null;
   city: string | null;
   attempts: number;
+  /** True only when Flipkart echoed back OUR pincode (the price is location-trusted). */
+  verified: boolean;
+  /** Flipkart's buyability verdict, whether or not a price was resolved. */
+  availability: ListingAvailability | null;
   /** The exact pricing-node fields used and their JSON path (source-of-truth trail). */
   raw: Record<string, unknown> | null;
   /** Buy-box seller the price came from, when identifiable. */
@@ -56,6 +100,22 @@ export interface ApiPricingDetail {
   stockStatus: PincodePricing['stockStatus'];
   raw: Record<string, unknown>;
   seller: { id: string | null; name: string | null; count: number | null } | null;
+}
+
+type Node = Record<string, unknown>;
+
+/** Parse a page/fetch body once; null when it isn't JSON. */
+function parseResponse(json: string): unknown {
+  try {
+    return JSON.parse(json) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+function pageContextOf(root: unknown): Node | undefined {
+  const pageData = ((root as Node)?.RESPONSE as Node)?.pageData as Node | undefined;
+  return pageData?.pageContext as Node | undefined;
 }
 
 function numOf(v: unknown): number | null {
@@ -79,15 +139,33 @@ function numOf(v: unknown): number | null {
  * heuristic makes the extracted price flap between checks.
  */
 export function extractApiPricingDetailed(json: string): ApiPricingDetail | null {
-  let state: unknown;
-  try {
-    state = JSON.parse(json);
-  } catch {
-    return null;
-  }
-  const pc = ((state as Record<string, unknown>)?.RESPONSE as Record<string, unknown>)?.pageData as
-    Record<string, unknown> | undefined;
-  const pageContext = pc?.pageContext as Record<string, unknown> | undefined;
+  return pricingDetailOf(parseResponse(json));
+}
+
+/**
+ * Flipkart's buyability verdict for the selected listing, from
+ * `pageContext.fdpEventTracking.events.psi.pls` — the same node the site's own
+ * front end uses to decide whether to render a buy button.
+ */
+export function extractListingAvailability(json: string): ListingAvailability {
+  return availabilityOf(parseResponse(json));
+}
+
+function availabilityOf(root: unknown): ListingAvailability {
+  const events = (pageContextOf(root)?.fdpEventTracking as Node)?.events as Node | undefined;
+  const pls = (events?.psi as Node)?.pls as Node | undefined;
+  if (!pls) return NO_AVAILABILITY;
+  const str = (v: unknown): string | null => (typeof v === 'string' && v ? v : null);
+  return {
+    isAvailable: typeof pls.isAvailable === 'boolean' ? pls.isAvailable : null,
+    availabilityStatus: str(pls.availabilityStatus),
+    unserviceabilityReason: str(pls.unserviceabilityReason),
+    listingState: str(pls.listingState),
+  };
+}
+
+function pricingDetailOf(root: unknown): ApiPricingDetail | null {
+  const pageContext = pageContextOf(root);
   if (!pageContext) return null;
 
   const pricing = pageContext.pricing as Record<string, unknown> | undefined;
@@ -116,8 +194,20 @@ export function extractApiPricingDetailed(json: string): ApiPricingDetail | null
   const rawMrp = numOf(pricing?.mrp) ?? numOf(psi?.mrp);
   const mrp = rawMrp !== null && rawMrp >= price ? rawMrp : null;
 
-  // A buyable buy-box price means in stock; only override if the product context
-  // explicitly flags otherwise (accessories live in slots, not pageContext).
+  // Stock: Flipkart's own `pls` verdict is authoritative when present. Only when
+  // it is absent do we fall back to scanning the product context for an
+  // out-of-stock flag. A buyable buy-box price otherwise means in stock
+  // (accessories live in slots, not pageContext).
+  const availability = availabilityOf(root);
+  if (isUnbuyable(availability)) {
+    return {
+      price,
+      mrp,
+      stockStatus: 'out_of_stock',
+      raw: rawPricingFields(pricing, psi, source),
+      seller: extractSeller(pageContext),
+    };
+  }
   let stock: PincodePricing['stockStatus'] = 'in_stock';
   const findOos = (n: unknown): void => {
     if (stock === 'out_of_stock' || !n || typeof n !== 'object') return;
@@ -141,16 +231,25 @@ export function extractApiPricingDetailed(json: string): ApiPricingDetail | null
     price,
     mrp,
     stockStatus: stock,
-    raw: {
-      source,
-      finalPrice: numOf(pricing?.finalPrice),
-      fsp: numOf(pricing?.fsp),
-      mrp: numOf(pricing?.mrp),
-      psiFinalPrice: numOf(psi?.finalPrice),
-      psiFsp: numOf(psi?.fsp),
-      psiMrp: numOf(psi?.mrp),
-    },
+    raw: rawPricingFields(pricing, psi, source),
     seller: extractSeller(pageContext),
+  };
+}
+
+/** The exact pricing-node fields consulted, for the audit's source-of-truth trail. */
+function rawPricingFields(
+  pricing: Node | undefined,
+  psi: Node | undefined,
+  source: string | null,
+): Record<string, unknown> {
+  return {
+    source,
+    finalPrice: numOf(pricing?.finalPrice),
+    fsp: numOf(pricing?.fsp),
+    mrp: numOf(pricing?.mrp),
+    psiFinalPrice: numOf(psi?.finalPrice),
+    psiFsp: numOf(psi?.fsp),
+    psiMrp: numOf(psi?.mrp),
   };
 }
 
@@ -204,12 +303,10 @@ export function extractAppliedLocation(json: string): {
   pincode: string | null;
   city: string | null;
 } {
-  let state: unknown;
-  try {
-    state = JSON.parse(json);
-  } catch {
-    return { pincode: null, city: null };
-  }
+  return appliedLocationOf(parseResponse(json));
+}
+
+function appliedLocationOf(state: unknown): { pincode: string | null; city: string | null } {
   let found: { pincode: string | null; city: string | null } | null = null;
   const walk = (n: unknown): void => {
     if (found !== null || !n || typeof n !== 'object') return;
@@ -240,9 +337,16 @@ export function extractAppliedPincode(json: string): string | null {
 
 /**
  * Fetch localized price/MRP/stock for a pincode via Flipkart's page/fetch API.
- * Retries a few times: a transient failure here would otherwise let the parser
- * fall back to the IP-default price, and since the proxy IP's region varies
- * between checks that produces flapping price-change alerts.
+ *
+ * Two terminal answers, in this order:
+ *  1. The listing is not buyable → an out-of-stock result, WITHOUT requiring the
+ *     pincode echo. Flipkart only populates the delivery/pincode component for a
+ *     buyable listing, so demanding the echo here would reject a legitimate
+ *     out-of-stock observation forever (and auto-pause the product). There is no
+ *     price to get wrong, so there is nothing for the echo to protect.
+ *  2. The listing IS buyable → the price is trusted only once Flipkart confirms
+ *     it applied OUR pincode; otherwise retry, and never record an unverified
+ *     price (the proxy exit region varies between checks, which flaps prices).
  */
 export async function fetchFlipkartPincodePricing(
   pageUri: string,
@@ -255,6 +359,7 @@ export async function fetchFlipkartPincodePricing(
   let raw: Record<string, unknown> | null = null;
   let seller: { id: string | null; name: string | null; count: number | null } | null = null;
   let sample: string | null = null;
+  let availability: ListingAvailability | null = null;
   let attempts = 0;
   for (let attempt = 0; attempt < 3; attempt++) {
     attempts++;
@@ -279,7 +384,8 @@ export async function fetchFlipkartPincodePricing(
       });
       status = res.statusCode;
       if (res.statusCode === 200) {
-        const detail = extractApiPricingDetailed(res.body);
+        const root = parseResponse(res.body);
+        const detail = pricingDetailOf(root);
         // Capture the source-of-truth trail on every 200, even when unverified,
         // so a rejected/flapping check is still fully explainable from the audit.
         if (detail) {
@@ -287,27 +393,29 @@ export async function fetchFlipkartPincodePricing(
           seller = detail.seller;
         }
         sample = pricingSample(res.body) ?? sample;
-        // Only trust the price when Flipkart confirms it applied OUR pincode.
-        // If the resolved pincode differs (silently used the IP default) — or
-        // can't be confirmed — retry; never record an unverified price.
-        const loc = extractAppliedLocation(res.body);
+        const loc = appliedLocationOf(root);
         applied = loc.pincode;
         city = loc.city;
+        availability = availabilityOf(root);
+
+        const trail = { status, applied, city, attempts, raw, seller, sample, availability };
+
+        // (1) Not buyable — terminal, and location-independent. Retrying cannot
+        // produce a pincode echo Flipkart never sends for an unbuyable listing.
+        if (isUnbuyable(availability) || detail?.stockStatus === 'out_of_stock') {
+          return {
+            ...trail,
+            pricing: { price: null, mrp: null, stockStatus: 'out_of_stock', pincode },
+            verified: applied === pincode,
+          };
+        }
+
+        // (2) Buyable — the price counts only once our pincode is confirmed.
         if (detail && applied === pincode) {
           return {
-            pricing: {
-              price: detail.price,
-              mrp: detail.mrp,
-              stockStatus: detail.stockStatus,
-              pincode,
-            },
-            status,
-            applied,
-            city,
-            attempts,
-            raw,
-            seller,
-            sample,
+            ...trail,
+            pricing: { price: detail.price, mrp: detail.mrp, stockStatus: 'in_stock', pincode },
+            verified: true,
           };
         }
       }
@@ -315,7 +423,18 @@ export async function fetchFlipkartPincodePricing(
       // retry
     }
   }
-  return { pricing: null, status, applied, city, attempts, raw, seller, sample };
+  return {
+    pricing: null,
+    status,
+    applied,
+    city,
+    attempts,
+    raw,
+    seller,
+    sample,
+    availability,
+    verified: false,
+  };
 }
 
 export function injectPincodePricing(html: string, pricing: PincodePricing): string {

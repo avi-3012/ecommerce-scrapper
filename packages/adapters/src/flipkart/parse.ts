@@ -182,15 +182,18 @@ export function parseFlipkartPage(html: string, expected?: FlipkartExpectedIds):
     try {
       const loc = JSON.parse(pincodeEl.first().text()) as PincodePricing;
       if (loc.stockStatus === 'out_of_stock') {
+        // Out of stock means out of stock: no current price, and the caller
+        // preserves the last known one rather than overwriting it with null.
         price = null;
         mrp = null;
         stockStatus = 'out_of_stock';
-      } else {
+        delete provenance.price;
+      } else if (loc.price !== null) {
         price = loc.price;
         mrp = loc.mrp;
         stockStatus = 'in_stock';
+        provenance.price = 'pincode-api';
       }
-      provenance.price = 'pincode-api';
       provenance.pincode = loc.pincode;
     } catch {
       // Malformed marker — keep the HTML-derived values.

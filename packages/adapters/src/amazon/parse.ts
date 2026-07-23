@@ -16,6 +16,25 @@ import { validateSnapshot } from '../validate.js';
  * the fixture suite must be extended with captured real pages before the
  * Milestone 1 soak.
  */
+/**
+ * Item-level availability, read from the buy-box availability block only. These
+ * phrases describe the LISTING ("Currently unavailable"), never a delivery
+ * restriction ("cannot be shipped to your location"), so they are safe to treat
+ * as out-of-stock regardless of which location the page was rendered for.
+ */
+const OUT_OF_STOCK = /currently unavailable|out of stock|temporarily unavailable/;
+const IN_STOCK = /in stock|order soon|left in stock/;
+
+/**
+ * Whether the page reports the item as out of stock. Shared with the adapter so
+ * "out of stock" has exactly one definition: an unbuyable listing has no
+ * location-specific price, so the adapter can record it without first proving
+ * the delivery pincode was applied.
+ */
+export function amazonOutOfStock(html: string): boolean {
+  return OUT_OF_STOCK.test(cheerio.load(html)('#availability').text().trim().toLowerCase());
+}
+
 export function parseAmazonPage(html: string, expectedAsin?: string): ProductSnapshot {
   detectInterstitials(html);
 
@@ -41,10 +60,10 @@ export function parseAmazonPage(html: string, expectedAsin?: string): ProductSna
   // ── Stock ──
   const availabilityText = $('#availability').text().trim().toLowerCase();
   let stockStatus: StockStatus = 'unknown';
-  if (/currently unavailable|out of stock|temporarily unavailable/.test(availabilityText)) {
+  if (OUT_OF_STOCK.test(availabilityText)) {
     stockStatus = 'out_of_stock';
     provenance.stock = 'availability-block';
-  } else if (/in stock|order soon|left in stock/.test(availabilityText)) {
+  } else if (IN_STOCK.test(availabilityText)) {
     stockStatus = 'in_stock';
     provenance.stock = 'availability-block';
   }

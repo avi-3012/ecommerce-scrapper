@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { parseAmazonPage } from './parse.js';
+import { amazonOutOfStock, parseAmazonPage } from './parse.js';
 import { CheckError } from '../errors.js';
 
 function fixture(name: string): string {
@@ -123,6 +123,20 @@ describe('amazon fixture suite (WP-1.2)', () => {
     // Out of stock ⇒ no trustworthy buy-box price; must be null, never a scraped number.
     expect(snap.price).toBeNull();
     expect(snap.mrp).toBeNull();
+  });
+
+  it('amazonOutOfStock agrees with the parser, and reads only the availability block', () => {
+    // The adapter uses this to accept an unbuyable listing without having
+    // proved the delivery pincode applied — so it must key on the ITEM being
+    // unavailable, never on a delivery-location message elsewhere on the page.
+    expect(amazonOutOfStock(fixture('out-of-stock'))).toBe(true);
+    expect(amazonOutOfStock(fixture('in-stock-basic'))).toBe(false);
+    const deliveryRestricted = `<!doctype html><html><body>
+      <span id="productTitle">Some Laptop</span>
+      <div id="availability"><span>In stock</span></div>
+      <div id="deliveryBlock">This item cannot be shipped to your selected delivery location.</div>
+    </body></html>`;
+    expect(amazonOutOfStock(deliveryRestricted)).toBe(false);
   });
 
   it('does not grab an accessory/EMI price on an out-of-stock page', () => {

@@ -119,15 +119,19 @@ export async function recordCheck(
   // client-rendered offers) — not every offer genuinely ending at once. Treat it
   // as "offers not read this cycle": keep the last known offers and suppress the
   // spurious all-removed offer_change.
+  // An out-of-stock listing is the same situation by another route: marketplaces
+  // stop rendering promotions on an unbuyable item, so its offers are absent or
+  // truncated rather than genuinely withdrawn. Freeze the last known offers
+  // alongside the last known price until the item is buyable again.
+  const outOfStock = snapshot.stockStatus === 'out_of_stock';
   const offersUnreliable =
-    snapshot.offers.length === 0 && previous !== null && previous.offers.length > 0;
+    (snapshot.offers.length === 0 || outOfStock) && previous !== null && previous.offers.length > 0;
   const events = offersUnreliable
     ? rawEvents.filter((event) => event.type !== 'offer_change')
     : rawEvents;
   const effectiveOffers = offersUnreliable && previous ? previous.offers : snapshot.offers;
 
-  const hasLivePrice =
-    snapshot.price !== null && snapshot.price > 0 && snapshot.stockStatus !== 'out_of_stock';
+  const hasLivePrice = !outOfStock && snapshot.price !== null && snapshot.price > 0;
   const priceChanged = hasLivePrice && (previous === null || previous.price !== snapshot.price);
   const currentOffers = JSON.parse(JSON.stringify(effectiveOffers)) as object;
 

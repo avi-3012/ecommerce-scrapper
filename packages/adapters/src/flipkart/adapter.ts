@@ -40,20 +40,23 @@ export class FlipkartAdapter implements MarketplaceAdapter {
           apiStatus: result.status,
           applied: result.applied,
           city: result.city,
-          verified: result.pricing !== null,
+          verified: result.verified,
           apiPrice: result.pricing?.price ?? null,
           apiMrp: result.pricing?.mrp ?? null,
           attempts: result.attempts,
           raw: result.raw,
           seller: result.seller,
           sample: result.sample,
+          availability: result.availability,
+          outOfStock: result.pricing?.stockStatus === 'out_of_stock',
         };
       }
       if (!result.pricing) {
-        // A pincode is configured but its localized price couldn't be fetched.
+        // The listing IS buyable but its localized price couldn't be confirmed.
         // Do NOT fall back to the IP-default price: the proxy IP's region varies
         // between checks, so that records a wrong price and fires a false drop.
         // Fail the check transiently — the last known price is preserved.
+        // (An out-of-stock listing never lands here: it needs no pincode echo.)
         throw new CheckError('other', `Flipkart pincode ${opts.pincode} pricing unavailable`);
       }
       page.body = injectPincodePricing(page.body, result.pricing);

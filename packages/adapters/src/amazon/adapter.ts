@@ -10,7 +10,7 @@ import {
 } from '../fetch/location.js';
 import { proxySession, resolveExitIp } from '../fetch/proxy.js';
 import { AMAZON_DOMAINS, extractAsin, recognizeAmazon } from './canonicalize.js';
-import { parseAmazonPage } from './parse.js';
+import { amazonOutOfStock, parseAmazonPage } from './parse.js';
 import { collectAmazonOffers, injectOffers } from './offers.js';
 
 export class AmazonAdapter implements MarketplaceAdapter {
@@ -59,13 +59,19 @@ export class AmazonAdapter implements MarketplaceAdapter {
         }
         return this.enrichOffers(page, cookie);
       }
+      // Out of stock is a location-independent fact about the listing: there is
+      // no localized price to get wrong, so record it rather than burning the
+      // remaining attempts and failing a check that already has its answer.
+      const outOfStock = amazonOutOfStock(page.body);
       if (debug) {
         debug.amazon = {
           locationApplied: false,
+          outOfStock,
           attempts: attempt + 1,
           resolvedLocation: resolvedLocation || null,
         };
       }
+      if (outOfStock) return this.enrichOffers(page, cookie);
     }
     // Never record a default-location price — fail transiently; last price kept.
     throw new CheckError('other', `Amazon did not apply pincode ${opts.pincode}`);

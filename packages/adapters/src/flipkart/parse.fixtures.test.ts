@@ -38,6 +38,23 @@ describe('flipkart fixture suite (WP-1.3)', () => {
     expect(snap.provenance.pincode).toBe('400001');
   });
 
+  it('an injected out-of-stock override wins over the price the page still shows', () => {
+    // Flipkart keeps quoting the seller's list price on an unbuyable listing.
+    // The API verdict is authoritative: no price, out of stock, no throw.
+    const html = injectPincodePricing(fixture('jsonld-in-stock'), {
+      price: null,
+      mrp: null,
+      stockStatus: 'out_of_stock',
+      pincode: '122004',
+    });
+    const snap = parseFlipkartPage(html, { pid: 'MOBGXKZ4GFWZHQCE' });
+    expect(snap.stockStatus).toBe('out_of_stock');
+    expect(snap.price).toBeNull();
+    expect(snap.mrp).toBeNull();
+    expect(snap.provenance.price).toBeUndefined();
+    expect(snap.provenance.pincode).toBe('122004');
+  });
+
   it('fixture: Coming Soon / Notify Me maps to out_of_stock (FR-2.7)', () => {
     const snap = parseFlipkartPage(fixture('jsonld-coming-soon'), { pid: 'MOBH2QZFDGKXYZAB' });
     expect(snap.stockStatus).toBe('out_of_stock');

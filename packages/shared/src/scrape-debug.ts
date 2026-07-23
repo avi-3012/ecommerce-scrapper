@@ -72,6 +72,19 @@ export interface ScrapeDebug {
     seller?: { id?: string | null; name?: string | null; count?: number | null } | null;
     /** Bounded raw JSON snippet around the pricing node — the source-of-truth bytes. */
     sample?: string | null;
+    /**
+     * Flipkart's own buyability verdict for the listing. When it says the item
+     * is unbuyable the pincode echo is absent BY DESIGN, so the check is
+     * recorded as out-of-stock instead of demanding verification.
+     */
+    availability?: {
+      isAvailable?: boolean | null;
+      availabilityStatus?: string | null;
+      unserviceabilityReason?: string | null;
+      listingState?: string | null;
+    } | null;
+    /** Whether this check resolved to out-of-stock (no price recorded). */
+    outOfStock?: boolean;
   };
 
   /** Amazon glow-location trail. */
@@ -82,6 +95,11 @@ export interface ScrapeDebug {
     attempts?: number;
     /** The delivery location string the page actually showed (glow ingress). */
     resolvedLocation?: string | null;
+    /**
+     * Item-level out-of-stock, which is location-independent — the reason a
+     * check may be accepted without the pincode having been applied.
+     */
+    outOfStock?: boolean;
   };
 
   /** Free-form notes an adapter can add for context. */
