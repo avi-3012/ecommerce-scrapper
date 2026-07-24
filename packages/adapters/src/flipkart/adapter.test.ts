@@ -172,17 +172,35 @@ describe('FlipkartAdapter — a non-delivering seller never sets the price', () 
     expect(mockedGot).toHaveBeenCalledTimes(2); // first response rejected, retried
   });
 
-  it('fails the check when every attempt is priced by a non-delivering seller', async () => {
-    // No response ever carries a price for the delivery pincode, so there is no
-    // local price to record — fail transiently rather than record the default.
+  it('marks out of stock when EVERY attempt says no seller delivers here', async () => {
+    // The product page reads "not deliverable to your location" with no other
+    // seller, so there is nothing buyable: record out of stock (price null, last
+    // known price preserved by the caller) rather than failing the check.
     mockedGot.mockResolvedValue({ statusCode: 200, body: unlocalizedApiBody } as never);
 
     const adapter = new FlipkartAdapter();
-    const debug: { pincode?: { locationErrorCode?: string | null } } = {};
-    await expect(
-      adapter.fetch(URL_, { pincode: '122004', pageFetch, debug }),
-    ).rejects.toMatchObject({ reason: 'other' });
+    const debug: { pincode?: { locationErrorCode?: string | null; outOfStock?: boolean } } = {};
+    const page = await adapter.fetch(URL_, { pincode: '122004', pageFetch, debug });
+    const snap = adapter.parse(page);
+
+    expect(snap.stockStatus).toBe('out_of_stock');
+    expect(snap.price).toBeNull(); // never the ₹76,990 non-delivering seller's price
     // The audit trail names why, so the cause is explainable without re-scraping.
     expect(debug.pincode?.locationErrorCode).toBe('NO_SERVICEABLE_SELLER');
+    expect(debug.pincode?.outOfStock).toBe(true);
+  });
+
+  it('does NOT mark out of stock when only some attempts say so (transient)', async () => {
+    // One "no delivering seller" response followed by a localised one is the
+    // flapping case — it must resolve to the real price, not out of stock.
+    mockedGot
+      .mockResolvedValueOnce({ statusCode: 200, body: unlocalizedApiBody } as never)
+      .mockResolvedValue({ statusCode: 200, body: localizedApiBody } as never);
+
+    const adapter = new FlipkartAdapter();
+    const snap = adapter.parse(await adapter.fetch(URL_, { pincode: '122004', pageFetch }));
+
+    expect(snap.stockStatus).toBe('in_stock');
+    expect(snap.price).toBe(114990);
   });
 });

@@ -379,7 +379,7 @@ export function extractAppliedPincode(json: string): string | null {
 /**
  * Fetch localized price/MRP/stock for a pincode via Flipkart's page/fetch API.
  *
- * Two terminal answers, in this order:
+ * Terminal answers, in this order:
  *  1. The listing is not buyable → an out-of-stock result, WITHOUT requiring the
  *     pincode echo. Flipkart only populates the delivery/pincode component for a
  *     buyable listing, so demanding the echo here would reject a legitimate
@@ -388,6 +388,13 @@ export function extractAppliedPincode(json: string): string | null {
  *  2. The listing IS buyable → the price is trusted only once Flipkart confirms
  *     it applied OUR pincode; otherwise retry, and never record an unverified
  *     price (the proxy exit region varies between checks, which flaps prices).
+ *  3. EVERY response says no seller delivers to the pincode → out of stock. The
+ *     product page shows "not deliverable to your location" with no other
+ *     seller, so there is nothing to buy here: record it as out of stock (which
+ *     preserves the last known price) rather than failing the check forever.
+ *     A single such response is NOT enough — Flipkart intermittently answers
+ *     this way for a listing that does have a delivering seller, which is why
+ *     attempt (2) retries first and only a unanimous verdict lands here.
  */
 export async function fetchFlipkartPincodePricing(
   pageUri: string,
@@ -403,6 +410,10 @@ export async function fetchFlipkartPincodePricing(
   let availability: ListingAvailability | null = null;
   let locationErrorCode: string | null = null;
   let attempts = 0;
+  // Unanimity tracking for (3): how many responses we actually parsed, and how
+  // many of those said no seller delivers to this pincode.
+  let parsedResponses = 0;
+  let noDeliveringSeller = 0;
   for (let attempt = 0; attempt < 3; attempt++) {
     attempts++;
     try {
@@ -463,10 +474,13 @@ export async function fetchFlipkartPincodePricing(
           };
         }
 
+        parsedResponses++;
+
         // (2) In stock, but the PRICING came from a seller that does not deliver
         // to our pincode — the default all-India price, not the price available
         // at the delivery location. Reject and retry for a localised answer.
         if (!isPricingLocalised(availability, locationErrorCode)) {
+          noDeliveringSeller++;
           continue;
         }
 
@@ -483,8 +497,7 @@ export async function fetchFlipkartPincodePricing(
       // retry
     }
   }
-  return {
-    pricing: null,
+  const trail = {
     status,
     applied,
     city,
@@ -494,8 +507,21 @@ export async function fetchFlipkartPincodePricing(
     sample,
     availability,
     locationErrorCode,
-    verified: false,
   };
+
+  // (3) Every response Flipkart gave us said no seller delivers to this pincode
+  // — the page reads "not deliverable to your location". Nothing is buyable
+  // here, so record out of stock (last known price preserved) instead of
+  // failing every check and auto-pausing a product that is simply undeliverable.
+  if (parsedResponses > 0 && noDeliveringSeller === parsedResponses) {
+    return {
+      ...trail,
+      pricing: { price: null, mrp: null, stockStatus: 'out_of_stock', pincode },
+      verified: applied === pincode,
+    };
+  }
+
+  return { ...trail, pricing: null, verified: false };
 }
 
 export function injectPincodePricing(html: string, pricing: PincodePricing): string {
