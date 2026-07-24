@@ -70,6 +70,30 @@ export function isUnbuyable(availability: ListingAvailability): boolean {
 }
 
 /**
+ * Flipkart intermittently answers with the pincode echoed in the location widget
+ * but the PRICING still taken from the default (all-India) listing — a seller
+ * that does not deliver to the requested pincode. It flags this itself, via
+ * `psi.pls.unserviceabilityReason` ("NoServiceableVendor") and/or the pincode
+ * component's `errorCode` ("NO_SERVICEABLE_SELLER").
+ *
+ * Such a price is NOT the price available at the delivery location — it is the
+ * default price, which is typically different (₹76,990 vs the localised
+ * ₹86,990 on the same listing). Accepting it recorded a phantom price drop, so
+ * the response is rejected and the call retried until Flipkart returns a
+ * properly localised one.
+ *
+ * Note this is about LOCALISATION, not stock: these responses come back
+ * `isAvailable: true` / `IN_STOCK`, so the out-of-stock path must be checked
+ * first and is unaffected.
+ */
+export function isPricingLocalised(
+  availability: ListingAvailability,
+  locationErrorCode: string | null,
+): boolean {
+  return !availability.unserviceabilityReason && !locationErrorCode;
+}
+
+/**
  * The full result of a pincode-pricing fetch, including the trail we need for
  * the scrape-audit even when the price is NOT trusted: the HTTP status, the
  * pincode Flipkart actually resolved, and how many attempts we made. `pricing`
@@ -85,6 +109,12 @@ export interface PincodeFetchResult {
   verified: boolean;
   /** Flipkart's buyability verdict, whether or not a price was resolved. */
   availability: ListingAvailability | null;
+  /**
+   * The pincode component's error code on the LAST response seen (e.g.
+   * "NO_SERVICEABLE_SELLER"). Non-null after all attempts means Flipkart never
+   * returned a price localised to the delivery pincode.
+   */
+  locationErrorCode: string | null;
   /** The exact pricing-node fields used and their JSON path (source-of-truth trail). */
   raw: Record<string, unknown> | null;
   /** Buy-box seller the price came from, when identifiable. */
@@ -306,8 +336,15 @@ export function extractAppliedLocation(json: string): {
   return appliedLocationOf(parseResponse(json));
 }
 
-function appliedLocationOf(state: unknown): { pincode: string | null; city: string | null } {
-  let found: { pincode: string | null; city: string | null } | null = null;
+interface AppliedLocation {
+  pincode: string | null;
+  city: string | null;
+  /** e.g. "NO_SERVICEABLE_SELLER" — the pincode resolved but no seller serves it. */
+  errorCode: string | null;
+}
+
+function appliedLocationOf(state: unknown): AppliedLocation {
+  let found: AppliedLocation | null = null;
   const walk = (n: unknown): void => {
     if (found !== null || !n || typeof n !== 'object') return;
     if (Array.isArray(n)) {
@@ -321,14 +358,18 @@ function appliedLocationOf(state: unknown): { pincode: string | null; city: stri
     ) {
       const p = String(o.pincode);
       if (/^\d{6}$/.test(p)) {
-        found = { pincode: p, city: typeof o.city === 'string' ? o.city : null };
+        found = {
+          pincode: p,
+          city: typeof o.city === 'string' ? o.city : null,
+          errorCode: typeof o.errorCode === 'string' ? o.errorCode : null,
+        };
         return;
       }
     }
     for (const k of Object.keys(o)) walk(o[k]);
   };
   walk(state);
-  return found ?? { pincode: null, city: null };
+  return found ?? { pincode: null, city: null, errorCode: null };
 }
 
 export function extractAppliedPincode(json: string): string | null {
@@ -360,6 +401,7 @@ export async function fetchFlipkartPincodePricing(
   let seller: { id: string | null; name: string | null; count: number | null } | null = null;
   let sample: string | null = null;
   let availability: ListingAvailability | null = null;
+  let locationErrorCode: string | null = null;
   let attempts = 0;
   for (let attempt = 0; attempt < 3; attempt++) {
     attempts++;
@@ -396,9 +438,20 @@ export async function fetchFlipkartPincodePricing(
         const loc = appliedLocationOf(root);
         applied = loc.pincode;
         city = loc.city;
+        locationErrorCode = loc.errorCode;
         availability = availabilityOf(root);
 
-        const trail = { status, applied, city, attempts, raw, seller, sample, availability };
+        const trail = {
+          status,
+          applied,
+          city,
+          attempts,
+          raw,
+          seller,
+          sample,
+          availability,
+          locationErrorCode,
+        };
 
         // (1) Not buyable — terminal, and location-independent. Retrying cannot
         // produce a pincode echo Flipkart never sends for an unbuyable listing.
@@ -410,7 +463,14 @@ export async function fetchFlipkartPincodePricing(
           };
         }
 
-        // (2) Buyable — the price counts only once our pincode is confirmed.
+        // (2) In stock, but the PRICING came from a seller that does not deliver
+        // to our pincode — the default all-India price, not the price available
+        // at the delivery location. Reject and retry for a localised answer.
+        if (!isPricingLocalised(availability, locationErrorCode)) {
+          continue;
+        }
+
+        // (3) Buyable and localised — the price counts once our pincode is confirmed.
         if (detail && applied === pincode) {
           return {
             ...trail,
@@ -433,6 +493,7 @@ export async function fetchFlipkartPincodePricing(
     seller,
     sample,
     availability,
+    locationErrorCode,
     verified: false,
   };
 }

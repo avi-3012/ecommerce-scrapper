@@ -83,6 +83,12 @@ export interface ScrapeDebug {
       unserviceabilityReason?: string | null;
       listingState?: string | null;
     } | null;
+    /**
+     * The pincode component's error code (e.g. "NO_SERVICEABLE_SELLER"). Set
+     * when Flipkart resolved the pincode but priced the listing from a seller
+     * that does not deliver there — the response is rejected and retried.
+     */
+    locationErrorCode?: string | null;
     /** Whether this check resolved to out-of-stock (no price recorded). */
     outOfStock?: boolean;
   };

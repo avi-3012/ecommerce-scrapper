@@ -1,10 +1,16 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { gotScraping } from 'got-scraping';
 import type { FetchFn } from '../fetch/http.js';
 import { FlipkartAdapter } from './adapter.js';
 
 vi.mock('got-scraping', () => ({ gotScraping: vi.fn() }));
 const mockedGot = vi.mocked(gotScraping);
+
+// The exit-IP echo also goes through gotScraping; disable it so the mock sees
+// only the page/fetch calls under test.
+process.env.SCRAPE_AUDIT_EXIT_IP = '0';
+
+beforeEach(() => mockedGot.mockReset());
 
 /** A buyable page/fetch response localised to 122004 at ₹1,14,990. */
 const localizedApiBody = JSON.stringify({
@@ -24,6 +30,53 @@ const localizedApiBody = JSON.stringify({
             pincodeData: {
               pincodeComponent: {
                 value: { type: 'PincodeValue', city: 'Gurgaon', pincode: 122004, sellerCount: 4 },
+              },
+            },
+          },
+        },
+      },
+    ],
+  },
+});
+
+/**
+ * The real failure mode behind a phantom price drop: Flipkart echoes the pincode
+ * (Gurgaon 122004) but prices the listing from the DEFAULT seller, which does not
+ * deliver there — flagged by `unserviceabilityReason` / `errorCode`. Here the
+ * default is ₹76,990 while the localised price is ₹86,990.
+ */
+const unlocalizedApiBody = JSON.stringify({
+  RESPONSE: {
+    pageData: {
+      pageContext: {
+        pricing: { finalPrice: { value: 76990 }, mrp: 85990 },
+        fdpEventTracking: {
+          events: {
+            psi: {
+              pls: {
+                isAvailable: true,
+                availabilityStatus: 'IN_STOCK',
+                unserviceabilityReason: 'NoServiceableVendor',
+                sellerId: '0f68f429dbc14f6c',
+              },
+            },
+          },
+        },
+      },
+    },
+    slots: [
+      {
+        widget: {
+          data: {
+            pincodeData: {
+              pincodeComponent: {
+                value: {
+                  type: 'PincodeValue',
+                  city: 'Gurgaon',
+                  errorCode: 'NO_SERVICEABLE_SELLER',
+                  pincode: 122004,
+                  singleSeller: false,
+                },
               },
             },
           },
@@ -89,5 +142,47 @@ describe('FlipkartAdapter — localisation is tier-independent', () => {
         pageFetch: browserFetch,
       }),
     ).rejects.toMatchObject({ reason: 'other' });
+  });
+});
+
+describe('FlipkartAdapter — a non-delivering seller never sets the price', () => {
+  const URL_ = 'https://www.flipkart.com/product/p/itm1234567890abc?pid=MOBHFN6YKGBPYJZD';
+  const pageFetch: FetchFn = async (url) => ({
+    url,
+    body: PAGE_HTML,
+    tier: 'http' as const,
+    fetchedAt: new Date(),
+  });
+
+  it('retries past a NoServiceableVendor response and records the localised price', async () => {
+    // Exactly the phantom-drop scenario: the first response prices the listing
+    // from the default seller (₹76,990) while echoing our pincode; the retry
+    // returns the properly localised price, which is what must be recorded.
+    mockedGot
+      .mockResolvedValueOnce({ statusCode: 200, body: unlocalizedApiBody } as never)
+      .mockResolvedValue({ statusCode: 200, body: localizedApiBody } as never);
+
+    const adapter = new FlipkartAdapter();
+    const debug = {};
+    const page = await adapter.fetch(URL_, { pincode: '122004', pageFetch, debug });
+    const snap = adapter.parse(page);
+
+    expect(snap.price).toBe(114990); // the localised price, never the ₹76,990 default
+    expect(snap.provenance.price).toBe('pincode-api');
+    expect(mockedGot).toHaveBeenCalledTimes(2); // first response rejected, retried
+  });
+
+  it('fails the check when every attempt is priced by a non-delivering seller', async () => {
+    // No response ever carries a price for the delivery pincode, so there is no
+    // local price to record — fail transiently rather than record the default.
+    mockedGot.mockResolvedValue({ statusCode: 200, body: unlocalizedApiBody } as never);
+
+    const adapter = new FlipkartAdapter();
+    const debug: { pincode?: { locationErrorCode?: string | null } } = {};
+    await expect(
+      adapter.fetch(URL_, { pincode: '122004', pageFetch, debug }),
+    ).rejects.toMatchObject({ reason: 'other' });
+    // The audit trail names why, so the cause is explainable without re-scraping.
+    expect(debug.pincode?.locationErrorCode).toBe('NO_SERVICEABLE_SELLER');
   });
 });
