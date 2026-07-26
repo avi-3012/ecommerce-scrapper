@@ -1,4 +1,4 @@
-import type { Marketplace, ProductSnapshot } from '@pricepulse/shared';
+import type { Marketplace, ProductSnapshot, ScrapeDebug } from '@pricepulse/shared';
 import type { FetchOptions, MarketplaceAdapter, RawPage, UrlRecognition } from '../adapter.js';
 import { CheckError } from '../errors.js';
 import { httpFetch } from '../fetch/http.js';
@@ -34,12 +34,12 @@ export class AmazonAdapter implements MarketplaceAdapter {
       debug.exitIp = await resolveExitIp();
     }
     if (!opts?.pincode) {
-      const page = await pageFetch(canonicalUrl);
+      const page = await pageFetch(canonicalUrl, { debug, kind: 'main_page' });
       if (debug) {
         debug.fetch = { finalUrl: page.url, bodyBytes: page.body.length, tier: page.tier };
         debug.amazon = { resolvedLocation: amazonResolvedLocation(page.body) || null };
       }
-      return this.enrichOffers(page, undefined);
+      return this.enrichOffers(page, undefined, debug);
     }
     if (debug) debug.pincodeRequested = opts.pincode;
 
@@ -47,12 +47,16 @@ export class AmazonAdapter implements MarketplaceAdapter {
     // a cached cookie minted on a different proxy IP can be ignored — retry with
     // a freshly-minted cookie until the page actually reflects the pincode.
     for (let attempt = 0; attempt < 3; attempt++) {
-      const cookie = await amazonLocationCookie(opts.pincode, canonicalUrl, attempt > 0);
+      const cookie = await amazonLocationCookie(opts.pincode, canonicalUrl, attempt > 0, debug);
       if (!cookie) {
         if (debug) debug.amazon = { locationApplied: false, attempts: attempt + 1 };
         throw new CheckError('other', `Amazon location for pincode ${opts.pincode} unavailable`);
       }
-      const page = await pageFetch(canonicalUrl, { headers: { cookie } });
+      const page = await pageFetch(canonicalUrl, {
+        headers: { cookie },
+        debug,
+        kind: 'main_page',
+      });
       const resolvedLocation = amazonResolvedLocation(page.body);
       if (debug) {
         debug.fetch = { finalUrl: page.url, bodyBytes: page.body.length, tier: page.tier };
@@ -61,7 +65,7 @@ export class AmazonAdapter implements MarketplaceAdapter {
         if (debug) {
           debug.amazon = { locationApplied: true, attempts: attempt + 1, resolvedLocation };
         }
-        return this.enrichOffers(page, cookie);
+        return this.enrichOffers(page, cookie, debug);
       }
       // Out of stock is a location-independent fact about the listing: there is
       // no localized price to get wrong, so record it rather than burning the
@@ -75,7 +79,7 @@ export class AmazonAdapter implements MarketplaceAdapter {
           resolvedLocation: resolvedLocation || null,
         };
       }
-      if (outOfStock) return this.enrichOffers(page, cookie);
+      if (outOfStock) return this.enrichOffers(page, cookie, debug);
     }
     // Never record a default-location price — fail transiently; last price kept.
     throw new CheckError('other', `Amazon did not apply pincode ${opts.pincode}`);
@@ -87,10 +91,14 @@ export class AmazonAdapter implements MarketplaceAdapter {
    * and carry them into parse via an injected marker script. A layout change
    * that blocks expansion throws parse_failed here — no summary-only fallback.
    */
-  private async enrichOffers(page: RawPage, cookie: string | undefined): Promise<RawPage> {
+  private async enrichOffers(
+    page: RawPage,
+    cookie: string | undefined,
+    debug: ScrapeDebug | undefined,
+  ): Promise<RawPage> {
     const asin = extractAsin(new URL(page.url)) ?? undefined;
     if (asin) {
-      const offers = await collectAmazonOffers(page.body, asin, this.fetchFn, cookie);
+      const offers = await collectAmazonOffers(page.body, asin, this.fetchFn, cookie, debug);
       if (offers) page.body = injectOffers(page.body, offers);
     }
     return page;

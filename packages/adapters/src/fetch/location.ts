@@ -1,6 +1,8 @@
 import { gotScraping } from 'got-scraping';
 import * as cheerio from 'cheerio';
+import type { ScrapeDebug } from '@pricepulse/shared';
 import { scraperProxyUrl } from './proxy.js';
+import { ACCEPT_ENCODING, decompressBody, recordProxyBytes } from './bytes.js';
 
 /**
  * Location-aware scraping (pincode). Amazon India localises price, delivery and
@@ -47,6 +49,7 @@ export async function amazonLocationCookie(
   pincode: string,
   seedUrl: string,
   forceRefresh = false,
+  debug?: ScrapeDebug,
 ): Promise<string | undefined> {
   const key = `amazon:${pincode}`;
   if (!forceRefresh) {
@@ -63,12 +66,16 @@ export async function amazonLocationCookie(
       url: seedUrl,
       timeout: { request: 20_000 },
       throwHttpErrors: false,
+      decompress: false,
       ...proxyOpts,
+      headers: { 'accept-encoding': ACCEPT_ENCODING },
       headerGeneratorOptions: HEADER_GEN,
     });
+    recordProxyBytes(debug, 'cookie_mint', seed.rawBody.length, { retry: forceRefresh });
     absorbCookies(jar, seed.headers['set-cookie']);
+    const seedBody = decompressBody(seed.rawBody, seed.headers['content-encoding']);
     const modal =
-      cheerio.load(seed.body)('#nav-global-location-data-modal-action').attr('data-a-modal') ?? '';
+      cheerio.load(seedBody)('#nav-global-location-data-modal-action').attr('data-a-modal') ?? '';
     const token = modal.match(/anti-csrftoken-a2z"\s*:\s*"([^"]+)"/)?.[1];
     if (!token) return undefined;
 
@@ -78,8 +85,10 @@ export async function amazonLocationCookie(
       method: 'POST',
       timeout: { request: 20_000 },
       throwHttpErrors: false,
+      decompress: false,
       ...proxyOpts,
       headers: {
+        'accept-encoding': ACCEPT_ENCODING,
         'anti-csrftoken-a2z': token,
         'x-requested-with': 'XMLHttpRequest',
         'content-type': 'application/x-www-form-urlencoded',
@@ -89,6 +98,7 @@ export async function amazonLocationCookie(
       body: `locationType=LOCATION_INPUT&zipCode=${encodeURIComponent(pincode)}&storeContext=generic&deviceType=web&pageType=Detail&actionSource=glow`,
       headerGeneratorOptions: HEADER_GEN,
     });
+    recordProxyBytes(debug, 'cookie_mint', res.rawBody.length);
     absorbCookies(jar, res.headers['set-cookie']);
 
     const cookie = cookieHeader(jar);

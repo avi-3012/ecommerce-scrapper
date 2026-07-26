@@ -68,6 +68,9 @@ export async function recordScrapeAudit(
         htmlPrice: htmlPrice !== null && Number.isFinite(htmlPrice) ? htmlPrice : null,
         exitIp: debug.exitIp ?? null,
         proxySession: debug.proxySession ?? null,
+        bytesWire: debug.proxy?.wireBytes ?? null,
+        proxyRequests: debug.proxy?.requests ?? null,
+        proxyRetries: debug.proxy?.retries ?? null,
         debug: JSON.parse(JSON.stringify(debug)) as object,
       },
     });

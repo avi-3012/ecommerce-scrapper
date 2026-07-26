@@ -28,7 +28,7 @@ export class FlipkartAdapter implements MarketplaceAdapter {
     // pincode price still comes from the page/fetch API below, so localisation
     // is identical on both tiers.
     const pageFetch = opts?.pageFetch ?? this.fetchFn;
-    const page = await pageFetch(canonicalUrl);
+    const page = await pageFetch(canonicalUrl, { debug, kind: 'main_page' });
     if (debug) {
       debug.fetch = { finalUrl: page.url, bodyBytes: page.body.length, tier: page.tier };
     }
@@ -38,7 +38,11 @@ export class FlipkartAdapter implements MarketplaceAdapter {
     if (opts?.pincode) {
       if (debug) debug.pincodeRequested = opts.pincode;
       const url = new URL(canonicalUrl);
-      const result = await fetchFlipkartPincodePricing(url.pathname + url.search, opts.pincode);
+      const result = await fetchFlipkartPincodePricing(
+        url.pathname + url.search,
+        opts.pincode,
+        debug,
+      );
       if (debug) {
         debug.pincode = {
           apiStatus: result.status,

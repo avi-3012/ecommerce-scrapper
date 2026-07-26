@@ -1,12 +1,17 @@
 import { gotScraping } from 'got-scraping';
+import type { ScrapeDebug, ProxyRequestKind } from '@pricepulse/shared';
 import type { RawPage } from '../adapter.js';
 import { CheckError } from '../errors.js';
 import { scraperProxyUrl } from './proxy.js';
+import { ACCEPT_ENCODING, decompressBody, recordProxyBytes } from './bytes.js';
 
 export interface HttpFetchOptions {
   timeoutMs?: number;
   /** Extra request headers, merged over the generated browser headers (e.g. XHR headers for AJAX endpoints). */
   headers?: Record<string, string>;
+  /** Bandwidth-accounting sink + label for this request (optional). */
+  debug?: ScrapeDebug;
+  kind?: ProxyRequestKind;
 }
 
 export type FetchFn = (url: string, options?: HttpFetchOptions) => Promise<RawPage>;
@@ -16,6 +21,11 @@ export type FetchFn = (url: string, options?: HttpFetchOptions) => Promise<RawPa
  * (generated browser headers, HTTP/2, TLS profile). Follows redirects, so
  * short links (amzn.in, dl.flipkart.com) resolve to full listing URLs.
  * All failure modes map onto the fixed failure taxonomy.
+ *
+ * Fetches the COMPRESSED body (`decompress: false` + an explicit accept-encoding
+ * the CDN honours) and decodes it here: this both fixes a large bandwidth leak
+ * (Flipkart ships HTML uncompressed unless asked — ~1.8 MB vs ~207 KB) and lets
+ * us record the exact wire bytes the proxy bills.
  */
 export const httpFetch: FetchFn = async (url, options = {}) => {
   const timeoutMs = options.timeoutMs ?? 20_000;
@@ -26,11 +36,14 @@ export const httpFetch: FetchFn = async (url, options = {}) => {
       url,
       timeout: { request: timeoutMs },
       throwHttpErrors: false,
+      // Read the raw compressed body so we can meter wire bytes and force
+      // compression via the header below.
+      decompress: false,
       // Route through the residential proxy when configured (R-2). Most HTTP
       // proxies can't tunnel HTTP/2, which surfaces as "Protocol error" — so
       // force HTTP/1.1 whenever a proxy is in the path.
       ...(proxyUrl ? { proxyUrl, http2: false } : {}),
-      ...(options.headers ? { headers: options.headers } : {}),
+      headers: { 'accept-encoding': ACCEPT_ENCODING, ...options.headers },
       headerGeneratorOptions: {
         devices: ['desktop'],
         locales: ['en-IN', 'en-US'],
@@ -45,6 +58,11 @@ export const httpFetch: FetchFn = async (url, options = {}) => {
     throw new CheckError('http_error', `Network error: ${message}`);
   }
 
+  // Meter the compressed transfer, then decode for the caller.
+  recordProxyBytes(options.debug, options.kind ?? 'main_page', response.rawBody.length, {
+    tier: 'http',
+  });
+
   const status = response.statusCode;
   if (status === 404 || status === 410) {
     throw new CheckError('listing_removed', `Listing returned HTTP ${status}`);
@@ -58,7 +76,7 @@ export const httpFetch: FetchFn = async (url, options = {}) => {
 
   return {
     url: response.url ?? url, // final URL after redirects
-    body: response.body,
+    body: decompressBody(response.rawBody, response.headers['content-encoding']),
     tier: 'http',
     fetchedAt: new Date(),
   };

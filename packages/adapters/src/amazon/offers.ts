@@ -1,4 +1,5 @@
 import * as cheerio from 'cheerio';
+import type { ScrapeDebug } from '@pricepulse/shared';
 import { CheckError } from '../errors.js';
 import type { FetchFn } from '../fetch/http.js';
 import type { RawOffer } from '../offers.js';
@@ -157,6 +158,7 @@ export async function collectAmazonOffers(
   asin: string,
   fetchFn: FetchFn,
   cookie?: string,
+  debug?: ScrapeDebug,
 ): Promise<RawOffer[] | null> {
   const $ = cheerio.load(html);
   const cards = extractOfferCards($);
@@ -177,7 +179,7 @@ export async function collectAmazonOffers(
         );
       }
       const url = buildSecondaryViewUrl(asin, card.config);
-      const page = await fetchFn(url, { timeoutMs: 15_000, headers });
+      const page = await fetchFn(url, { timeoutMs: 15_000, headers, debug, kind: 'side_sheet' });
       const items = parseSecondaryViewOffers(page.body);
       if (items.length === 0) {
         throw new CheckError(

@@ -261,7 +261,13 @@ model ScrapeAudit {
 
   exitIp       String? @map("exit_ip")
   proxySession String? @map("proxy_session")
-  // Full structured debug blob (superset of the columns above)
+
+  // Proxy bandwidth accounting (wire/compressed bytes actually transferred).
+  bytesWire     Int? @map("bytes_wire")
+  proxyRequests Int? @map("proxy_requests")
+  proxyRetries  Int? @map("proxy_retries")
+
+  // Full structured debug blob (superset of the columns above; incl. per-kind bytes)
   debug        Json    @default("{}")
 
   product Product @relation(fields: [productId], references: [id], onDelete: Cascade)

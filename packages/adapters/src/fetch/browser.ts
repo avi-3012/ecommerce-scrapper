@@ -3,8 +3,18 @@ import type { FetchFn } from './http.js';
 import { CheckError } from '../errors.js';
 import { playwrightProxy } from './proxy.js';
 import type { PlaywrightProxy } from './proxy.js';
+import { recordProxyBytes } from './bytes.js';
 
 const MAX_PAGES_PER_BROWSER = 50;
+
+/**
+ * Resource types the browser tier never parses. Blocking them cuts a large slice
+ * of tier-2 bandwidth (images/fonts don't compress). Scripts, stylesheets and
+ * the document are deliberately NOT blocked: these pages are client-rendered, so
+ * stripping JS/CSS would leave an empty skeleton with none of the price/offer
+ * data we extract.
+ */
+const BLOCKED_RESOURCES: ReadonlySet<string> = new Set(['image', 'media', 'font']);
 
 /**
  * Tier-2 fetch (WP-1.4): headless Chromium via Playwright, loaded lazily so
@@ -26,6 +36,18 @@ export async function createBrowserFetch(): Promise<FetchFn | undefined> {
       launch(opts: { headless: boolean; proxy?: PlaywrightProxy }): Promise<{
         newContext(opts?: object): Promise<{
           addCookies(cookies: Array<{ name: string; value: string; url: string }>): Promise<void>;
+          route(
+            pattern: string,
+            handler: (route: {
+              request(): { resourceType(): string };
+              abort(): Promise<void>;
+              continue(): Promise<void>;
+            }) => void,
+          ): Promise<void>;
+          newCDPSession(page: unknown): Promise<{
+            send(method: string): Promise<unknown>;
+            on(event: string, cb: (e: { encodedDataLength?: number }) => void): void;
+          }>;
           newPage(): Promise<{
             goto(url: string, opts: object): Promise<{ status(): number } | null>;
             content(): Promise<string>;
@@ -59,6 +81,15 @@ export async function createBrowserFetch(): Promise<FetchFn | undefined> {
       viewport: { width: 1366, height: 768 },
     });
     try {
+      // Drop images/media/fonts — never parsed, and the bulk of avoidable
+      // tier-2 bandwidth. Best-effort: a routing failure must not fail the fetch.
+      await context
+        .route('**/*', (route) =>
+          BLOCKED_RESOURCES.has(route.request().resourceType())
+            ? void route.abort()
+            : void route.continue(),
+        )
+        .catch(() => undefined);
       // Apply a caller-supplied cookie (Amazon's glow location cookie) so a
       // browser-tier fetch is localised exactly like the HTTP tier. Without it,
       // the browser would load the IP-default location and record a wrong price.
@@ -76,8 +107,24 @@ export async function createBrowserFetch(): Promise<FetchFn | undefined> {
         if (cookies.length) await context.addCookies(cookies);
       }
       const page = await context.newPage();
+      // Meter true wire bytes (encoded) via CDP — best-effort observability.
+      let wireBytes = 0;
+      try {
+        const cdp = await context.newCDPSession(page);
+        await cdp.send('Network.enable');
+        cdp.on('Network.loadingFinished', (e) => {
+          wireBytes += e.encodedDataLength ?? 0;
+        });
+      } catch {
+        // CDP unavailable — skip metering, never block the fetch.
+      }
       const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
       pagesServed += 1;
+      if (wireBytes > 0) {
+        recordProxyBytes(options?.debug, options?.kind ?? 'main_page', wireBytes, {
+          tier: 'browser',
+        });
+      }
       const status = response?.status() ?? 0;
       if (status === 404 || status === 410) {
         throw new CheckError('listing_removed', `Listing returned HTTP ${status} (browser)`);

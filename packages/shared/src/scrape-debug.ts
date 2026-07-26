@@ -18,7 +18,30 @@ export interface PriceCandidate {
   value: number | null;
 }
 
+/** Which proxied request a byte tally belongs to. */
+export type ProxyRequestKind =
+  | 'main_page' // the listing page fetch (tier-1 HTTP or tier-2 browser)
+  | 'pincode_api' // Flipkart page/fetch localisation calls
+  | 'cookie_mint' // Amazon glow-location cookie mint (seed page)
+  | 'side_sheet' // Amazon offer side-sheet AJAX
+  | 'exit_ip' // the exit-IP echo
+  | 'resolve'; // short-link redirect resolution
+
+/** Per-check proxy bandwidth tally — wire (compressed) bytes actually transferred. */
+export interface ProxyUsage {
+  /** Total compressed bytes over the proxy this check. */
+  wireBytes: number;
+  /** Number of proxied requests made. */
+  requests: number;
+  /** How many of those were retries (localisation/cookie re-attempts). */
+  retries: number;
+  /** Breakdown by request kind. */
+  byKind: Partial<Record<ProxyRequestKind, { wireBytes: number; requests: number }>>;
+}
+
 export interface ScrapeDebug {
+  /** Per-check proxy bandwidth (wire bytes), for cost attribution per product. */
+  proxy?: ProxyUsage;
   /** Proxy region/sticky-session token in effect (never credentials). */
   proxySession?: string | null;
   /**

@@ -12,6 +12,10 @@ process.env.SCRAPE_AUDIT_EXIT_IP = '0';
 
 beforeEach(() => mockedGot.mockReset());
 
+/** A got response as our code reads it: raw (compressed) body + headers, identity here. */
+const res = (body: string) =>
+  ({ statusCode: 200, body, rawBody: Buffer.from(body), headers: {} }) as never;
+
 /** A buyable page/fetch response localised to 122004 at ₹1,14,990. */
 const localizedApiBody = JSON.stringify({
   RESPONSE: {
@@ -97,7 +101,7 @@ describe('FlipkartAdapter — localisation is tier-independent', () => {
     // recorded the IP-default ₹82,990 because it skipped the pincode API. Now
     // the browser fetch is passed as `pageFetch`, and the localised ₹1,14,990
     // from the (still-called) page/fetch API must win.
-    mockedGot.mockResolvedValue({ statusCode: 200, body: localizedApiBody } as never);
+    mockedGot.mockResolvedValue(res(localizedApiBody));
 
     const browserFetch: FetchFn = vi.fn(async (url) => ({
       url,
@@ -123,10 +127,9 @@ describe('FlipkartAdapter — localisation is tier-independent', () => {
   it('still refuses to record an IP-default price when the browser tier cannot localise', async () => {
     // page/fetch never confirms our pincode → no localised price → the adapter
     // throws rather than falling back to the ₹82,990 the page shipped.
-    mockedGot.mockResolvedValue({
-      statusCode: 200,
-      body: JSON.stringify({ RESPONSE: { pageData: { pageContext: { pricing: {} } } } }),
-    } as never);
+    mockedGot.mockResolvedValue(
+      res(JSON.stringify({ RESPONSE: { pageData: { pageContext: { pricing: {} } } } })),
+    );
 
     const browserFetch: FetchFn = async (url) => ({
       url,
@@ -159,8 +162,8 @@ describe('FlipkartAdapter — a non-delivering seller never sets the price', () 
     // from the default seller (₹76,990) while echoing our pincode; the retry
     // returns the properly localised price, which is what must be recorded.
     mockedGot
-      .mockResolvedValueOnce({ statusCode: 200, body: unlocalizedApiBody } as never)
-      .mockResolvedValue({ statusCode: 200, body: localizedApiBody } as never);
+      .mockResolvedValueOnce(res(unlocalizedApiBody))
+      .mockResolvedValue(res(localizedApiBody));
 
     const adapter = new FlipkartAdapter();
     const debug = {};
@@ -176,7 +179,7 @@ describe('FlipkartAdapter — a non-delivering seller never sets the price', () 
     // The product page reads "not deliverable to your location" with no other
     // seller, so there is nothing buyable: record out of stock (price null, last
     // known price preserved by the caller) rather than failing the check.
-    mockedGot.mockResolvedValue({ statusCode: 200, body: unlocalizedApiBody } as never);
+    mockedGot.mockResolvedValue(res(unlocalizedApiBody));
 
     const adapter = new FlipkartAdapter();
     const debug: { pincode?: { locationErrorCode?: string | null; outOfStock?: boolean } } = {};
@@ -194,8 +197,8 @@ describe('FlipkartAdapter — a non-delivering seller never sets the price', () 
     // One "no delivering seller" response followed by a localised one is the
     // flapping case — it must resolve to the real price, not out of stock.
     mockedGot
-      .mockResolvedValueOnce({ statusCode: 200, body: unlocalizedApiBody } as never)
-      .mockResolvedValue({ statusCode: 200, body: localizedApiBody } as never);
+      .mockResolvedValueOnce(res(unlocalizedApiBody))
+      .mockResolvedValue(res(localizedApiBody));
 
     const adapter = new FlipkartAdapter();
     const snap = adapter.parse(await adapter.fetch(URL_, { pincode: '122004', pageFetch }));

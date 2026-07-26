@@ -1,5 +1,7 @@
 import { gotScraping } from 'got-scraping';
+import type { ScrapeDebug } from '@pricepulse/shared';
 import { scraperProxyUrl } from '../fetch/proxy.js';
+import { ACCEPT_ENCODING, decompressBody, recordProxyBytes } from '../fetch/bytes.js';
 
 /**
  * Flipkart location-aware pricing (pincode). Flipkart's PDP price/stock is
@@ -399,6 +401,7 @@ export function extractAppliedPincode(json: string): string | null {
 export async function fetchFlipkartPincodePricing(
   pageUri: string,
   pincode: string,
+  debug?: ScrapeDebug,
 ): Promise<PincodeFetchResult> {
   const proxyUrl = scraperProxyUrl();
   let status: number | null = null;
@@ -422,8 +425,12 @@ export async function fetchFlipkartPincodePricing(
         method: 'POST',
         timeout: { request: 25_000 },
         throwHttpErrors: false,
+        // Meter wire bytes + force compression (the API also ships uncompressed
+        // by default — ~395 KB vs ~45 KB).
+        decompress: false,
         ...(proxyUrl ? { proxyUrl, http2: false } : {}),
         headers: {
+          'accept-encoding': ACCEPT_ENCODING,
           'content-type': 'application/json',
           origin: 'https://www.flipkart.com',
           referer: `https://www.flipkart.com${pageUri}`,
@@ -435,9 +442,11 @@ export async function fetchFlipkartPincodePricing(
           locationContext: { pincode: Number(pincode), changed: true },
         }),
       });
+      recordProxyBytes(debug, 'pincode_api', res.rawBody.length, { retry: attempt > 0 });
       status = res.statusCode;
       if (res.statusCode === 200) {
-        const root = parseResponse(res.body);
+        const body = decompressBody(res.rawBody, res.headers['content-encoding']);
+        const root = parseResponse(body);
         const detail = pricingDetailOf(root);
         // Capture the source-of-truth trail on every 200, even when unverified,
         // so a rejected/flapping check is still fully explainable from the audit.
@@ -445,7 +454,7 @@ export async function fetchFlipkartPincodePricing(
           raw = detail.raw;
           seller = detail.seller;
         }
-        sample = pricingSample(res.body) ?? sample;
+        sample = pricingSample(body) ?? sample;
         const loc = appliedLocationOf(root);
         applied = loc.pincode;
         city = loc.city;

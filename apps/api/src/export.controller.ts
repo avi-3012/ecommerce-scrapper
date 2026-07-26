@@ -216,6 +216,134 @@ export class ExportController {
     res.end();
   }
 
+  /**
+   * Per-product proxy bandwidth report (cost attribution). Aggregates the
+   * scrape-audit trail over the retention window: how many checks ran, how many
+   * succeeded/failed, how many needed retries or the (expensive) browser tier,
+   * and the WIRE bytes each product cost — with a per-kind breakdown
+   * (page vs pincode API vs cookie mint vs offer side-sheet vs browser).
+   * `?days=` narrows the window (default = full 14-day retention).
+   */
+  @Get('proxy-usage.csv')
+  async proxyUsage(@Res() res: Response, @Query('days') days?: string): Promise<void> {
+    startCsv(res, 'pricepulse-proxy-usage.csv');
+    res.write(
+      row([
+        'product',
+        'marketplace',
+        'scrapes',
+        'succeeded',
+        'failed',
+        'retries',
+        'tier-2 (browser)',
+        'wire MB',
+        'KB / scrape',
+        'page MB (http)',
+        'page MB (browser)',
+        'pincode API MB',
+        'cookie mint MB',
+        'side-sheet MB',
+      ]),
+    );
+    const windowDays = Math.min(Math.max(Number(days) || 14, 1), 60);
+    const since = new Date(Date.now() - windowDays * 24 * 3600 * 1000);
+    const names = new Map(
+      (
+        await this.prisma.product.findMany({
+          select: { id: true, displayName: true, marketplace: true },
+        })
+      ).map((p) => [p.id, p]),
+    );
+
+    interface Agg {
+      scrapes: number;
+      ok: number;
+      failed: number;
+      retries: number;
+      tier2: number;
+      wire: number;
+      httpPage: number;
+      browserPage: number;
+      pincodeApi: number;
+      cookieMint: number;
+      sideSheet: number;
+    }
+    const blank = (): Agg => ({
+      scrapes: 0,
+      ok: 0,
+      failed: 0,
+      retries: 0,
+      tier2: 0,
+      wire: 0,
+      httpPage: 0,
+      browserPage: 0,
+      pincodeApi: 0,
+      cookieMint: 0,
+      sideSheet: 0,
+    });
+    const byProduct = new Map<string, Agg>();
+    const kindBytes = (a: ScrapeAudit, kind: string): number => {
+      const proxy = (a.debug as { proxy?: { byKind?: Record<string, { wireBytes?: number }> } })
+        ?.proxy;
+      return proxy?.byKind?.[kind]?.wireBytes ?? 0;
+    };
+
+    let cursor: bigint | null = null;
+    for (;;) {
+      const batch: ScrapeAudit[] = await this.prisma.scrapeAudit.findMany({
+        where: { createdAt: { gte: since }, ...(cursor ? { id: { gt: cursor } } : {}) },
+        orderBy: { id: 'asc' },
+        take: 5000,
+      });
+      if (batch.length === 0) break;
+      for (const a of batch) {
+        const agg = byProduct.get(a.productId) ?? blank();
+        agg.scrapes += 1;
+        if (a.success) agg.ok += 1;
+        else agg.failed += 1;
+        agg.retries += a.proxyRetries ?? 0;
+        agg.wire += a.bytesWire ?? 0;
+        const mainPage = kindBytes(a, 'main_page');
+        if (a.tier === 'browser') {
+          agg.tier2 += 1;
+          agg.browserPage += mainPage;
+        } else {
+          agg.httpPage += mainPage;
+        }
+        agg.pincodeApi += kindBytes(a, 'pincode_api');
+        agg.cookieMint += kindBytes(a, 'cookie_mint');
+        agg.sideSheet += kindBytes(a, 'side_sheet');
+        byProduct.set(a.productId, agg);
+      }
+      cursor = batch[batch.length - 1]!.id;
+    }
+
+    const mb = (bytes: number): string => (bytes / 1e6).toFixed(1);
+    const rows = [...byProduct.entries()].sort((x, y) => y[1].wire - x[1].wire);
+    for (const [productId, a] of rows) {
+      const p = names.get(productId);
+      res.write(
+        row([
+          p?.displayName ?? productId,
+          p?.marketplace ?? '',
+          a.scrapes,
+          a.ok,
+          a.failed,
+          a.retries,
+          a.tier2,
+          mb(a.wire),
+          a.scrapes ? (a.wire / a.scrapes / 1024).toFixed(0) : '0',
+          mb(a.httpPage),
+          mb(a.browserPage),
+          mb(a.pincodeApi),
+          mb(a.cookieMint),
+          mb(a.sideSheet),
+        ]),
+      );
+    }
+    res.end();
+  }
+
   @Get('alerts.csv')
   async alerts(@Res() res: Response): Promise<void> {
     startCsv(res, 'pricepulse-alerts.csv');

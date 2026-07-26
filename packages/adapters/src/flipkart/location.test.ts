@@ -168,7 +168,13 @@ describe('extractListingAvailability / isUnbuyable', () => {
 
 describe('fetchFlipkartPincodePricing (verification vs. stock)', () => {
   const respond = (body: string): void => {
-    mockedFetch.mockResolvedValue({ statusCode: 200, body } as never);
+    // httpFetch/pincode fetch reads the raw (compressed) body; identity here.
+    mockedFetch.mockResolvedValue({
+      statusCode: 200,
+      body,
+      rawBody: Buffer.from(body),
+      headers: {},
+    } as never);
   };
 
   beforeEach(() => {
