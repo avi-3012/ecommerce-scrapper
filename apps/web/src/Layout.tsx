@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Bell,
   Download,
+  Gauge,
   LayoutDashboard,
   LogOut,
   MessageSquare,
@@ -26,6 +27,7 @@ const NAV: Array<{ to: string; label: string; icon: LucideIcon }> = [
   { to: '/alerts', label: 'Alerts', icon: Bell },
   { to: '/notifications', label: 'Templates', icon: MessageSquare },
   { to: '/import', label: 'Import', icon: Download },
+  { to: '/bandwidth', label: 'Bandwidth', icon: Gauge },
   { to: '/settings', label: 'Settings', icon: Settings2 },
 ];
 

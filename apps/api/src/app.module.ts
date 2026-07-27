@@ -15,6 +15,7 @@ import { StatusController } from './status.controller.js';
 import { ImportController } from './import/import.controller.js';
 import { ImportService } from './import/import.service.js';
 import { ExportController } from './export.controller.js';
+import { AnalyticsController } from './analytics.controller.js';
 import { EventsController, EventsService } from './events.js';
 import { BrowserService } from './browser.service.js';
 
@@ -30,6 +31,7 @@ import { BrowserService } from './browser.service.js';
     StatusController,
     ImportController,
     ExportController,
+    AnalyticsController,
     EventsController,
   ],
   providers: [

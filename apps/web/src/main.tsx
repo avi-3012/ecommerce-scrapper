@@ -15,6 +15,7 @@ import { AlertsPage } from './pages/Alerts.js';
 import { SettingsPage } from './pages/Settings.js';
 import { NotificationTemplatesPage } from './pages/NotificationTemplates.js';
 import { ImportPage } from './pages/Import.js';
+import { BandwidthPage } from './pages/Bandwidth.js';
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 10_000 } },
@@ -31,6 +32,7 @@ const router = createBrowserRouter([
       { path: '/products/:id', element: <ProductDetailPage /> },
       { path: '/alerts', element: <AlertsPage /> },
       { path: '/import', element: <ImportPage /> },
+      { path: '/bandwidth', element: <BandwidthPage /> },
       { path: '/notifications', element: <NotificationTemplatesPage /> },
       { path: '/settings', element: <SettingsPage /> },
     ],

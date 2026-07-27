@@ -166,6 +166,30 @@ export interface SystemStatusReport {
   workerStale: boolean;
 }
 
+/** Per-product proxy bandwidth (wire/compressed bytes) over a window. */
+export interface ProxyUsageProduct {
+  productId: string;
+  displayName: string;
+  marketplace: Marketplace | '';
+  scrapes: number;
+  ok: number;
+  failed: number;
+  retries: number;
+  tier2: number;
+  wireBytes: number;
+  httpPage: number;
+  browserPage: number;
+  pincodeApi: number;
+  cookieMint: number;
+  sideSheet: number;
+}
+
+export interface ProxyUsageReport {
+  windowDays: number;
+  totals: Omit<ProxyUsageProduct, 'productId' | 'displayName' | 'marketplace'>;
+  products: ProxyUsageProduct[];
+}
+
 export interface SettingsView {
   checkIntervalMinutes: number;
   globalDropThresholdPct: string;
