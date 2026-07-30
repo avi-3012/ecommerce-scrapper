@@ -131,9 +131,22 @@ export function parseAmazonPage(html: string, expectedAsin?: string): ProductSna
   // strikethrough amounts (e.g. a ₹69.90 add-on/EMI figure), so scan the
   // candidates and take the first one that is actually >= the price rather than
   // blindly the first match.
+  //
+  // CRITICAL: scope to the buy-box price block. A page-wide `.a-text-price`
+  // scan grabs the FIRST strikethrough anywhere on the page — which is a
+  // Sponsored Products carousel for an unrelated item (`#sp_detail2-…`), whose
+  // ₹2,24,999 list price surfaced as a phantom 95%-off MRP on a ₹10,999 phone.
+  const mrpSelectors = [
+    '#corePriceDisplay_desktop_feature_div .a-price.a-text-price .a-offscreen',
+    '#corePriceDisplay_desktop_feature_div .basisPrice .a-offscreen',
+    '#corePrice_feature_div .a-price.a-text-price .a-offscreen',
+    '#apex_desktop .a-price.a-text-price .a-offscreen',
+    '#tp_price_block_total_price_ww .a-price.a-text-price .a-offscreen',
+    '#corePriceDisplay_mobile_feature_div .a-price.a-text-price .a-offscreen',
+  ];
   let mrp: number | null = null;
   if (price !== null) {
-    $('.basisPrice .a-offscreen, .a-price.a-text-price .a-offscreen').each((_i, el) => {
+    $(mrpSelectors.join(', ')).each((_i, el) => {
       if (mrp !== null) return;
       const value = parseInrAmount($(el).text());
       if (value !== null && value >= price) {

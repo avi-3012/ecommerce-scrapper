@@ -116,6 +116,45 @@ describe('amazon fixture suite (WP-1.2)', () => {
     expect(snap.mrp).toBe(12999);
   });
 
+  it('ignores a Sponsored Products strikethrough outside the buy-box (phantom high MRP)', () => {
+    // Regression (B0FN7QTRPY): a ₹2,24,999 list price from a Sponsored Products
+    // carousel for an UNRELATED item appeared before the buy-box in the DOM. The
+    // page-wide MRP scan grabbed it, producing a bogus 95%-off MRP on a ₹10,999
+    // phone. The sponsored strike must be ignored; the real buy-box MRP wins.
+    const html = `<!doctype html><html><body>
+      <span id="productTitle">Samsung Galaxy M07 Mobile (Black, 4GB RAM, 64GB Storage)</span>
+      <div id="availability"><span>In stock</span></div>
+      <div id="sp_detail2-prime_theme_for_non_prime_members_B0H6WLYG5L">
+        <span class="a-price a-text-price"><span class="a-offscreen">₹2,24,999.00</span></span>
+      </div>
+      <div id="corePriceDisplay_desktop_feature_div">
+        <span class="a-price priceToPay"><span class="a-offscreen">₹10,999</span></span>
+        <span class="a-price a-text-price"><span class="a-offscreen">₹12,999</span></span>
+      </div>
+    </body></html>`;
+    const snap = parseAmazonPage(html, 'B0FN7QTRPY');
+    expect(snap.price).toBe(10999);
+    expect(snap.mrp).toBe(12999);
+    expect(snap.discountPct).toBe(15.39); // (12999-10999)/12999, not 95%
+  });
+
+  it('falls back to equal-to-price when the only strikethrough is a sponsored ad', () => {
+    // No real buy-box list price; the sponsored ₹2,24,999 must never become MRP.
+    const html = `<!doctype html><html><body>
+      <span id="productTitle">Samsung Galaxy M07</span>
+      <div id="availability"><span>In stock</span></div>
+      <div id="sp_detail2-prime_theme_for_non_prime_members_B0H6WLYG5L">
+        <span class="a-price a-text-price"><span class="a-offscreen">₹2,24,999.00</span></span>
+      </div>
+      <div id="corePriceDisplay_desktop_feature_div">
+        <span class="a-price priceToPay"><span class="a-offscreen">₹10,999</span></span>
+      </div>
+    </body></html>`;
+    const snap = parseAmazonPage(html, 'B0FN7QTRPY');
+    expect(snap.price).toBe(10999);
+    expect(snap.mrp).toBe(10999); // equal-to-price, never the sponsored number
+  });
+
   it('fixture: out-of-stock is a successful check with NULL price (no garbage price)', () => {
     const snap = parseAmazonPage(fixture('out-of-stock'), 'B09XS7JWHH');
     expect(snap.stockStatus).toBe('out_of_stock');
