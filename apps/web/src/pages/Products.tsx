@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ExternalLink,
   Flame,
@@ -16,6 +16,7 @@ import {
   Target,
   Timer,
   Trash2,
+  X,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { api, errorMessage, inr, isNearLow, relTime } from '../api.js';
@@ -45,6 +46,8 @@ export function ProductsPage(): JSX.Element {
   const [manageCategories, setManageCategories] = useState(false);
   const [view, setView] = useState<'list' | 'grid'>('grid');
   const [search, setSearch] = useState(params.get('search') ?? '');
+  const [minPrice, setMinPrice] = useState(params.get('minPrice') ?? '');
+  const [maxPrice, setMaxPrice] = useState(params.get('maxPrice') ?? '');
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const toast = useToast();
@@ -55,11 +58,38 @@ export function ProductsPage(): JSX.Element {
     return () => clearTimeout(handle);
   }, [search]);
 
+  // Price range: debounce both bounds together (one URL write, no key race).
+  // Skip when unchanged so mounting a deep link (e.g. ?page=3&minPrice=…) doesn't
+  // wipe the page back to 1.
+  useEffect(() => {
+    const handle = setTimeout(() => {
+      if (
+        (params.get('minPrice') ?? '') === minPrice.trim() &&
+        (params.get('maxPrice') ?? '') === maxPrice.trim()
+      )
+        return;
+      setParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          setOrDelete(next, 'minPrice', minPrice.trim());
+          setOrDelete(next, 'maxPrice', maxPrice.trim());
+          next.delete('page');
+          return next;
+        },
+        { replace: true },
+      );
+    }, 400);
+    return () => clearTimeout(handle);
+  }, [minPrice, maxPrice]);
+
   const queryString = params.toString();
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isPlaceholderData } = useQuery({
     queryKey: ['products', queryString],
     queryFn: () => api<Paged<Product>>(`/products?${queryString}`),
     refetchInterval: 60_000,
+    // Keep the current page visible while the next loads — no skeleton flash on
+    // pagination or filter changes.
+    placeholderData: keepPreviousData,
   });
 
   const { data: categories } = useQuery({
@@ -114,8 +144,7 @@ export function ProductsPage(): JSX.Element {
 
   function setFilter(key: string, value: string): void {
     const next = new URLSearchParams(params);
-    if (value) next.set(key, value);
-    else next.delete(key);
+    setOrDelete(next, key, value);
     if (key !== 'page') next.delete('page');
     setParams(next, { replace: true });
   }
@@ -123,6 +152,15 @@ export function ProductsPage(): JSX.Element {
   const page = Number(params.get('page') ?? '1');
   const totalPages = data ? Math.max(1, Math.ceil(data.total / data.pageSize)) : 1;
   const pendingId = action.isPending ? action.variables?.id : undefined;
+
+  // Page changes push a history entry (Back returns to the previous page) and
+  // scroll to the top so the next page starts from the first card.
+  function goToPage(p: number): void {
+    const next = new URLSearchParams(params);
+    next.set('page', String(p));
+    setParams(next);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
 
   return (
     <div className="space-y-4">
@@ -164,6 +202,16 @@ export function ProductsPage(): JSX.Element {
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className="h-9 min-w-52 flex-1 rounded-md border border-line-strong bg-card px-3 text-sm text-fg placeholder:text-fg-subtle focus:border-brand focus:outline-none"
+        />
+        <PriceRange
+          min={minPrice}
+          max={maxPrice}
+          onMin={setMinPrice}
+          onMax={setMaxPrice}
+          onClear={() => {
+            setMinPrice('');
+            setMaxPrice('');
+          }}
         />
         <Select
           value={params.get('marketplace') ?? ''}
@@ -247,7 +295,15 @@ export function ProductsPage(): JSX.Element {
           }
           action={
             queryString ? (
-              <Button variant="secondary" onClick={() => setParams({}, { replace: true })}>
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  setSearch('');
+                  setMinPrice('');
+                  setMaxPrice('');
+                  setParams({}, { replace: true });
+                }}
+              >
                 Clear filters
               </Button>
             ) : (
@@ -259,41 +315,43 @@ export function ProductsPage(): JSX.Element {
             )
           }
         />
-      ) : view === 'grid' ? (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {data.items.map((p) => (
-            <ProductGridCard
-              key={p.id}
-              product={p}
-              busy={pendingId === p.id}
-              onOpen={() => navigate(`/products/${p.id}`)}
-              onAction={(verb) => action.mutate({ id: p.id, verb })}
-              onEdit={(patch) => edit.mutate({ id: p.id, patch })}
-              onDelete={() => setDeleting(p)}
-            />
-          ))}
-        </div>
       ) : (
-        <ul className="space-y-2">
-          {data.items.map((p) => (
-            <ProductRow
-              key={p.id}
-              product={p}
-              busy={pendingId === p.id}
-              onOpen={() => navigate(`/products/${p.id}`)}
-              onAction={(verb) => action.mutate({ id: p.id, verb })}
-              onEdit={(patch) => edit.mutate({ id: p.id, patch })}
-              onDelete={() => setDeleting(p)}
-            />
-          ))}
-        </ul>
+        <div
+          className={`transition-opacity duration-200 ${isPlaceholderData ? 'pointer-events-none opacity-60' : 'opacity-100'}`}
+        >
+          {view === 'grid' ? (
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {data.items.map((p) => (
+                <ProductGridCard
+                  key={p.id}
+                  product={p}
+                  busy={pendingId === p.id}
+                  onOpen={() => navigate(`/products/${p.id}`)}
+                  onAction={(verb) => action.mutate({ id: p.id, verb })}
+                  onEdit={(patch) => edit.mutate({ id: p.id, patch })}
+                  onDelete={() => setDeleting(p)}
+                />
+              ))}
+            </div>
+          ) : (
+            <ul className="space-y-2">
+              {data.items.map((p) => (
+                <ProductRow
+                  key={p.id}
+                  product={p}
+                  busy={pendingId === p.id}
+                  onOpen={() => navigate(`/products/${p.id}`)}
+                  onAction={(verb) => action.mutate({ id: p.id, verb })}
+                  onEdit={(patch) => edit.mutate({ id: p.id, patch })}
+                  onDelete={() => setDeleting(p)}
+                />
+              ))}
+            </ul>
+          )}
+        </div>
       )}
 
-      <Pagination
-        page={page}
-        totalPages={totalPages}
-        onPage={(p) => setFilter('page', String(p))}
-      />
+      <Pagination page={page} totalPages={totalPages} onPage={goToPage} />
 
       <CategoryManager open={manageCategories} onClose={() => setManageCategories(false)} />
 
@@ -306,6 +364,70 @@ export function ProductsPage(): JSX.Element {
         onConfirm={() => deleting && remove.mutate(deleting.id)}
         onCancel={() => setDeleting(null)}
       />
+    </div>
+  );
+}
+
+/** Set a query param, or delete it when the value is empty. */
+function setOrDelete(params: URLSearchParams, key: string, value: string): void {
+  if (value) params.set(key, value);
+  else params.delete(key);
+}
+
+/**
+ * Current-price range filter. Two boxes (min / max) that filter the catalogue by
+ * the last known price; a coloured track between them fills the active band so
+ * it reads as a range, and a clear affordance appears once either box is set.
+ */
+function PriceRange({
+  min,
+  max,
+  onMin,
+  onMax,
+  onClear,
+}: {
+  min: string;
+  max: string;
+  onMin: (v: string) => void;
+  onMax: (v: string) => void;
+  onClear: () => void;
+}): JSX.Element {
+  const active = min !== '' || max !== '';
+  const digitsOnly = (v: string): string => v.replace(/[^\d]/g, '');
+  return (
+    <div
+      className={`flex h-9 items-center gap-1.5 rounded-md border bg-card px-2 ${
+        active ? 'border-brand' : 'border-line-strong'
+      }`}
+    >
+      <span className="text-xs text-fg-subtle">₹</span>
+      <input
+        inputMode="numeric"
+        placeholder="min"
+        aria-label="Minimum price"
+        value={min}
+        onChange={(e) => onMin(digitsOnly(e.target.value))}
+        className="nums w-16 bg-transparent text-sm text-fg placeholder:text-fg-subtle focus:outline-none"
+      />
+      <span className="h-px w-3 rounded-full bg-line-strong" aria-hidden />
+      <input
+        inputMode="numeric"
+        placeholder="max"
+        aria-label="Maximum price"
+        value={max}
+        onChange={(e) => onMax(digitsOnly(e.target.value))}
+        className="nums w-16 bg-transparent text-sm text-fg placeholder:text-fg-subtle focus:outline-none"
+      />
+      {active && (
+        <button
+          onClick={onClear}
+          aria-label="Clear price range"
+          title="Clear price range"
+          className="text-fg-subtle transition-colors hover:text-fg"
+        >
+          <X className="size-3.5" aria-hidden />
+        </button>
+      )}
     </div>
   );
 }

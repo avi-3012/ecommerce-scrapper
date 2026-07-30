@@ -83,6 +83,9 @@ const listQuerySchema = z.object({
   stock: z.enum(STOCK_STATUSES).optional(),
   status: z.enum(PRODUCT_STATUSES).optional(),
   health: z.enum(['healthy', 'failing', 'auto_paused']).optional(),
+  /** Current-price range (inclusive), in rupees. */
+  minPrice: z.coerce.number().min(0).optional(),
+  maxPrice: z.coerce.number().min(0).optional(),
   sort: z
     .enum(['recent', 'name', 'price_asc', 'price_desc', 'biggest_drop', 'recently_changed'])
     .default('recent'),
@@ -168,6 +171,17 @@ export class ProductsController {
       ...(q.health === 'auto_paused' ? { status: 'paused_auto' as const } : {}),
       ...(q.health === 'failing' ? { consecutiveFailures: { gt: 0 } } : {}),
       ...(q.health === 'healthy' ? { consecutiveFailures: 0, status: 'active' as const } : {}),
+      // Price range on the last known price. A product with no price yet
+      // (null currentPrice) is excluded once either bound is set — it can't be
+      // placed in a price band.
+      ...(q.minPrice !== undefined || q.maxPrice !== undefined
+        ? {
+            currentPrice: {
+              ...(q.minPrice !== undefined ? { gte: q.minPrice } : {}),
+              ...(q.maxPrice !== undefined ? { lte: q.maxPrice } : {}),
+            },
+          }
+        : {}),
     };
     const [items, total] = await Promise.all([
       this.prisma.product.findMany({
