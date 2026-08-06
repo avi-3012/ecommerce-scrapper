@@ -156,6 +156,9 @@ model Product {
   categoryId           String?       @map("category_id") @db.Uuid
   // Per-product check cadence; null = use the global settings interval.
   checkIntervalMinutes Int?          @map("check_interval_minutes")
+  // User-set list priority: a positive integer, lower = shown first (1 = top).
+  // The whole catalogue defaults to 1; raising a product's number sinks it.
+  priority             Int           @default(1)
 
   // Current-state snapshot, denormalised for the catalogue view (FR-5.2)
   currentPrice       Decimal?    @map("current_price") @db.Decimal(12, 2)
@@ -194,6 +197,8 @@ model Product {
   // Scheduler queue (WP-1.5)
   @@index([status, nextCheckAt])
   @@index([categoryId])
+  // Catalogue is ordered by priority first, then a secondary sort.
+  @@index([priority])
   @@map("products")
 }
 

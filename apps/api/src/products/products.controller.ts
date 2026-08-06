@@ -61,6 +61,8 @@ const configurableFields = {
     .max(24 * 60)
     .nullable()
     .optional(),
+  // List priority: a positive integer, lower = shown first (1 = top).
+  priority: z.number().int().min(1).max(1_000_000).optional(),
 };
 
 const registerSchema = z.object({
@@ -183,10 +185,15 @@ export class ProductsController {
           }
         : {}),
     };
+    const secondarySort: Prisma.ProductOrderByWithRelationInput = SORT_ORDER[q.sort] ?? {
+      createdAt: 'desc',
+    };
     const [items, total] = await Promise.all([
       this.prisma.product.findMany({
         where,
-        orderBy: SORT_ORDER[q.sort] ?? SORT_ORDER.recent,
+        // Priority is always the primary key (1 shown first, then ascending);
+        // the user's chosen sort breaks ties within a priority band.
+        orderBy: [{ priority: 'asc' }, secondarySort],
         skip: (q.page - 1) * q.pageSize,
         take: q.pageSize,
         include: { category: { select: { id: true, name: true, color: true } } },

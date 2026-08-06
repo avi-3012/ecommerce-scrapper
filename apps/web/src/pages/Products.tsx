@@ -3,6 +3,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ExternalLink,
+  Flag,
   Flame,
   FolderCog,
   LayoutGrid,
@@ -506,8 +507,12 @@ function RowActions({
   );
 }
 
-/** Per-product patch shape for the inline editors (target price, check interval). */
-type ProductPatch = { targetPrice?: number | null; checkIntervalMinutes?: number | null };
+/** Per-product patch shape for the inline editors (target price, interval, priority). */
+type ProductPatch = {
+  targetPrice?: number | null;
+  checkIntervalMinutes?: number | null;
+  priority?: number;
+};
 
 /** Human interval label; null = "default" (falls back to the global cadence). */
 function fmtInterval(mins: number | null): string {
@@ -611,6 +616,16 @@ function ControlChips({
 }): JSX.Element {
   return (
     <div className={`flex items-center gap-1.5 ${className}`}>
+      <InlineNumber
+        icon={Flag}
+        value={product.priority}
+        min={1}
+        max={1_000_000}
+        placeholder="priority"
+        ariaLabel="List priority (1 = shown first)"
+        render={(v) => `P${v ?? 1}`}
+        onSave={(v) => v !== null && onEdit({ priority: v })}
+      />
       <InlineNumber
         icon={Target}
         value={product.targetPrice === null ? null : Number(product.targetPrice)}

@@ -71,6 +71,7 @@ export interface Product {
   targetPrice: string | null;
   dropThresholdPct: string | null;
   checkIntervalMinutes: number | null;
+  priority: number;
   status: ProductStatus;
   consecutiveFailures: number;
   currentPrice: string | null;
