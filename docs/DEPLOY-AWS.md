@@ -111,18 +111,27 @@ SSH tunnel without changing the compose file.)
 
 Launch, then associate the Elastic IP with the instance.
 
-### 3. Point a domain at it
+### 3. Domain and TLS — optional, and off by default
 
-Add an **A record** for your hostname → the Elastic IP. Caddy needs a real
-domain to obtain a certificate. Wait for it to resolve:
+The shipped `.env.aws.example` uses `SITE_HOSTNAME=:80` and
+`COOKIE_SECURE=false`, so a fresh deploy is reachable at
+**http://\<ELASTIC_IP\>** with no domain and no certificate. Skip to step 4 if
+that is all you need today.
+
+**To add HTTPS**, point an **A record** at the Elastic IP, wait for it to
+resolve, then set `SITE_HOSTNAME=yourdomain.com` and `COOKIE_SECURE=true`.
+Caddy obtains the certificate itself on the next start.
 
 ```bash
-dig +short pricepulse.example.com
+dig +short pricepulse.yourdomain.com
 ```
 
-_No domain?_ You can run HTTP-only on the EC2 DNS name for a test: set
-`SITE_HOSTNAME=:80` and `COOKIE_SECURE=false`. Do not leave it that way — login
-cookies cross the internet in clear text.
+> **Do not put a domain you do not control in `SITE_HOSTNAME`.** Caddy will
+> 308-redirect every request to HTTPS and then fail forever to get a
+> certificate for it — Let's Encrypt refuses `example.com` and friends by
+> policy — leaving the site unreachable with no obvious cause. Over plain HTTP
+> your password and session cookie cross the internet in clear text, so move to
+> a real domain before this holds anything you would mind losing.
 
 ### 4. Configure and start
 
