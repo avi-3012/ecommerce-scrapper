@@ -9,6 +9,11 @@
 #
 # HTTP-only demo on a bare IP: set COOKIE_SECURE=false in .env.vm so login
 # works without HTTPS. Put a domain + TLS in front before real/production use.
+#
+# NOTE ON SCRAPING: there are no proxies any more — every request leaves from
+# whatever IP this host has. On a cloud VM that is a DATACENTER IP, which the
+# marketplaces treat far more harshly than a residential line. Run the worker
+# on a residential connection; this file is fine for the API and dashboard.
 
 name: pricepulse
 
@@ -19,6 +24,15 @@ x-app: &app
   image: pricepulse-app:local
   env_file: .env.vm
   restart: unless-stopped
+  volumes:
+    # The identity pool: personas, their cookie jars, and the IP-level backoff
+    # state. Identities are long-lived (weeks) and the API and worker draw from
+    # the SAME pool, so both mount it — that shared filesystem is also what
+    # makes the whole-IP request budget a single budget rather than two.
+    - identities:/repo/data/identities
+    # Live scraping config, so pool size / cycle / IP budget can be tuned and
+    # the worker restarted without rebuilding the image.
+    - ../config:/repo/config:ro
 
 services:
   db:
@@ -49,7 +63,9 @@ services:
     <<: *app
     command: node apps/api/dist/main.js
     ports:
-      - '80:3000'
+      # 80 on a real VM; override API_PORT locally where 80 is taken or
+      # privileged (e.g. API_PORT=8081).
+      - '${API_PORT:-80}:3000'
     depends_on:
       db:
         condition: service_healthy
@@ -67,3 +83,4 @@ services:
 
 volumes:
   pgdata:
+  identities:

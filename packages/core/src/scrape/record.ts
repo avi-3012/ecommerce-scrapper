@@ -28,11 +28,20 @@ export async function recordCheck(
   outcome: CheckOutcome,
   settings: Settings,
   now: Date = new Date(),
+  /**
+   * Polling tiers. A property of the CONNECTION's request budget rather than of
+   * the user's preferences, so it arrives from the scraping config rather than
+   * the settings table.
+   */
+  tiers: TierConfig = DEFAULT_TIERS,
 ): Promise<RecordedCheck> {
-  // Per-product interval overrides the global default when set.
+  // Per-product interval overrides the global default when set, and stretches
+  // for products whose price has not moved in a long time.
   const nextCheckAt = computeNextCheck(
     product.checkIntervalMinutes ?? settings.checkIntervalMinutes,
     now,
+    stillnessMs(product, now),
+    tiers,
   );
 
   if (!outcome.ok) {
@@ -51,6 +60,7 @@ export async function recordCheck(
           extractionTier: outcome.tier,
           durationMs: outcome.durationMs,
           stockStatus: 'unknown',
+          identityId: outcome.debug?.identityId ?? null,
         },
       }),
       prisma.product.update({
@@ -162,6 +172,7 @@ export async function recordCheck(
         stockStatus: snapshot.stockStatus,
         extractionTier: outcome.tier,
         durationMs: outcome.durationMs,
+        identityId: outcome.debug?.identityId ?? null,
       },
     }),
     prisma.product.update({
@@ -226,8 +237,119 @@ export function previousStateOf(product: Product): PreviousState | null {
   };
 }
 
-/** Next scheduled check: interval ± up to 10% jitter (FR-2.5 pacing). */
-export function computeNextCheck(intervalMinutes: number, from: Date): Date {
+/**
+ * How far a product's interval may stretch when its price never moves, and how
+ * long it must be still before stretching starts.
+ */
+export interface TierConfig {
+  warmAfterHours: number;
+  coldAfterHours: number;
+  warmMultiplier: number;
+  coldMultiplier: number;
+}
+
+/** Used when no scraping config is threaded in (tests, ad-hoc calls). */
+export const DEFAULT_TIERS: TierConfig = {
+  warmAfterHours: 6,
+  coldAfterHours: 72,
+  warmMultiplier: 4,
+  coldMultiplier: 15,
+};
+
+export type Tier = 'hot' | 'warm' | 'cold';
+
+/**
+ * Which polling tier a product is in, from how long its price has sat still.
+ *
+ *   hot   — moved recently, or brand new. Full configured rate.
+ *   warm  — still for hours. Checked several times less often.
+ *   cold  — still for days. Checked rarely.
+ *
+ * This is the ONLY lever that makes a large catalogue fit a fixed request
+ * budget. Requests per minute is `products ÷ interval`; nothing about identity,
+ * headers or pacing changes that arithmetic. A catalogue of 300 is affordable
+ * because most of it is cold at any moment, and the handful that is actually
+ * moving keeps the fast cadence that made you want 1-minute checks in the
+ * first place.
+ */
+export function tierFor(stillness: number | null, tiers: TierConfig = DEFAULT_TIERS): Tier {
+  // Never demote a product that has no recorded change yet: that is a new
+  // product, not a static one, and it has never had the chance to move.
+  if (stillness === null) return 'hot';
+  if (stillness >= tiers.coldAfterHours * 3600_000) return 'cold';
+  if (stillness >= tiers.warmAfterHours * 3600_000) return 'warm';
+  return 'hot';
+}
+
+/**
+ * How long a product has gone without its price moving. Null when it has never
+ * had a recorded change (a new product, which must not be backed off).
+ */
+export function stillnessMs(product: Pick<Product, 'lastChangedAt'>, now: Date): number | null {
+  if (!product.lastChangedAt) return null;
+  return Math.max(0, now.getTime() - product.lastChangedAt.getTime());
+}
+
+/**
+ * The multiplier applied to a product's interval because its price is not
+ * moving. 1 = check at the configured rate.
+ *
+ * This is the lever that makes a large catalogue affordable. Requests per minute
+ * is `products ÷ interval`, and it is the only number the marketplaces judge —
+ * so the way to watch 300 products is not to ask 300 times a minute, it is to
+ * ask often about the handful that are actually moving and rarely about the rest.
+ * A laptop whose price has not changed in a fortnight does not need checking
+ * every sixty seconds, and checking it anyway spends budget that a volatile
+ * product could have used.
+ *
+ * It also breaks up the metronome. A catalogue polled on one uniform interval
+ * emits a perfectly periodic request pattern from a single address, which is
+ * the most machine-like signal there is and one no header can disguise.
+ */
+export function idleMultiplier(
+  stillness: number | null,
+  tiers: TierConfig = DEFAULT_TIERS,
+): number {
+  switch (tierFor(stillness, tiers)) {
+    case 'cold':
+      return tiers.coldMultiplier;
+    case 'warm':
+      return tiers.warmMultiplier;
+    default:
+      return 1;
+  }
+}
+
+/**
+ * Next scheduled check: interval × idle-backoff, ± up to 10% jitter.
+ *
+ * The jitter is not decoration — without it every product registered in the same
+ * import drifts into the same second and the catalogue fires in a burst.
+ */
+export function computeNextCheck(
+  intervalMinutes: number,
+  from: Date,
+  stillness: number | null = null,
+  tiers: TierConfig = DEFAULT_TIERS,
+): Date {
   const jitterFactor = 0.9 + Math.random() * 0.2;
-  return new Date(from.getTime() + intervalMinutes * 60_000 * jitterFactor);
+  const effective = intervalMinutes * idleMultiplier(stillness, tiers);
+  return new Date(from.getTime() + effective * 60_000 * jitterFactor);
+}
+
+/**
+ * Requests per minute a catalogue costs, given how many products are in each
+ * tier. This is the number the marketplaces judge, and the only one that
+ * decides whether a catalogue is servable.
+ */
+export function requestsPerMinute(
+  counts: Record<Tier, number>,
+  intervalMinutes: number,
+  tiers: TierConfig = DEFAULT_TIERS,
+): number {
+  return (
+    counts.hot / intervalMinutes +
+    counts.warm / (intervalMinutes * tiers.warmMultiplier) +
+    counts.cold / (intervalMinutes * tiers.coldMultiplier)
+  );
 }

@@ -1,0 +1,109 @@
+# PricePulse on AWS — the FULL stack: caddy + api + worker + db.
+#
+# ── Know this before you run it ──────────────────────────────────────────────
+# The scraper has no proxies: every request leaves from whatever IP the host
+# has, and on EC2 that is an AWS datacenter IP. AWS publishes its own ranges at
+# ip-ranges.amazonaws.com/ip-ranges.json, so this address is KNOWN to be a
+# datacenter — expect materially more blocking than from a residential line.
+#
+# That is a deliberate, informed trade for having everything in one place. Two
+# things follow from it:
+#   1. Run `ramp` on day one to MEASURE what this IP is actually granted, rather
+#      than trusting any number in a config file.
+#   2. If blocking is worse than you can live with, deploy/docker-compose.worker.yml
+#      moves the scraper to a residential machine without touching this file.
+#
+# Run from the repo root on the EC2 box:
+#   docker compose --env-file deploy/.env.aws -f deploy/docker-compose.aws.yml up -d --build
+
+name: pricepulse
+
+x-app: &app
+  build:
+    context: ..
+    dockerfile: deploy/Dockerfile.render
+  image: pricepulse-app:local
+  env_file: .env.aws
+  restart: unless-stopped
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # Bound to LOOPBACK on the EC2 host, never 0.0.0.0. Unreachable from the
+    # internet; reachable through an SSH tunnel, which is how the home worker
+    # connects without Postgres ever being publicly exposed.
+    ports:
+      - '127.0.0.1:5432:5432'
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}']
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  # One-shot: apply migrations + seed the single user, then exit.
+  migrate:
+    <<: *app
+    restart: 'no'
+    command: sh -c "pnpm --filter @pricepulse/db migrate:deploy && pnpm --filter @pricepulse/db seed:prod"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  api:
+    <<: *app
+    command: node apps/api/dist/main.js
+    expose:
+      - '3000'
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  worker:
+    <<: *app
+    command: node apps/worker/dist/main.js
+    volumes:
+      # The identity pool: personas, cookie jars, IP-level backoff state, and
+      # the captured response bodies behind every failure. Must be a volume —
+      # identities are long-lived and the captures are the only record of what
+      # a marketplace actually sent when a check broke.
+      - identities:/repo/data/identities
+      # Live scraping config, so the pool size / budget / tiering can be tuned
+      # and the worker restarted without rebuilding the image.
+      - ../config:/repo/config:ro
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  # Automatic HTTPS. Needs SITE_HOSTNAME to be a real domain pointed at this
+  # instance's Elastic IP; without one, see the HTTP-only note in the runbook.
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      SITE_HOSTNAME: ${SITE_HOSTNAME}
+    depends_on:
+      - api
+
+volumes:
+  pgdata:
+  identities:
+  caddy_data:
+  caddy_config:

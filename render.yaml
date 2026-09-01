@@ -7,6 +7,17 @@
 #
 # Deploy: Render Dashboard → New → Blueprint → pick this repo. See
 # docs/DEPLOY-RENDER.md for the full walkthrough and the two secrets you set.
+#
+# ── READ THIS BEFORE DEPLOYING SCRAPING TO RENDER ──────────────────────────
+# The scraper no longer uses residential proxies: every request leaves from
+# whatever IP the host has. On Render that is a DATACENTER IP, which Amazon and
+# Flipkart treat far more harshly than a residential line — the proxies were
+# what made a datacenter deployment viable, and they are gone.
+#
+# This blueprint therefore still deploys the API and dashboard well, but the
+# WORKER is expected to run on the residential connection instead (see the
+# README, "Identity pool & IP caps"). If you do run the worker here anyway,
+# expect blocks, and note the disk caveat below.
 
 databases:
   - name: pricepulse-db
@@ -51,8 +62,17 @@ services:
         sync: false # your login email
       - key: SEED_USER_PASSWORD
         sync: false # your login password (delivered out-of-band)
-      - key: SCRAPER_PROXY_URL
-        sync: false # residential proxy gateway URL (R-2); blank = direct
+      # The identity pool the preview fetch borrows from. Render disks cannot be
+      # shared between services, so an API here and a worker elsewhere keep
+      # SEPARATE pools and SEPARATE cap counters — which means the cap is not
+      # enforced across them. Two processes only share a cap when they share a
+      # filesystem, i.e. when they run on the same machine.
+      - key: IDENTITY_DIR
+        value: /var/pricepulse/identities
+    disk:
+      name: pricepulse-api-identities
+      mountPath: /var/pricepulse/identities
+      sizeGB: 1
       # PORT is injected by Render automatically; the API reads it.
 
   # ── Monitoring worker (background, always-on) ──
@@ -76,5 +96,12 @@ services:
         value: '30'
       - key: SCHEDULER_TICK_SECONDS
         value: '20'
-      - key: SCRAPER_PROXY_URL
-        sync: false # residential proxy gateway URL (R-2); blank = direct
+      - key: IDENTITY_DIR
+        value: /var/pricepulse/identities
+    # Identities are long-lived (weeks). Losing the store means every persona is
+    # brand new on an IP the marketplaces already know, which is the worst of
+    # both worlds — so the pool needs a real disk, not the ephemeral filesystem.
+    disk:
+      name: pricepulse-worker-identities
+      mountPath: /var/pricepulse/identities
+      sizeGB: 1

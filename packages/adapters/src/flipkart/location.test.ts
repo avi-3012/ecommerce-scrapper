@@ -7,6 +7,8 @@ import {
   fetchFlipkartPincodePricing,
   isUnbuyable,
 } from './location.js';
+import { createTestSession } from '../identity/testing.js';
+import type { IdentitySession } from '../identity/session.js';
 
 vi.mock('got-scraping', () => ({ gotScraping: vi.fn() }));
 const mockedFetch = vi.mocked(gotScraping);
@@ -168,7 +170,7 @@ describe('extractListingAvailability / isUnbuyable', () => {
 
 describe('fetchFlipkartPincodePricing (verification vs. stock)', () => {
   const respond = (body: string): void => {
-    // httpFetch/pincode fetch reads the raw (compressed) body; identity here.
+    // The session reads the raw (compressed) body; identity encoding here.
     mockedFetch.mockResolvedValue({
       statusCode: 200,
       body,
@@ -177,8 +179,13 @@ describe('fetchFlipkartPincodePricing (verification vs. stock)', () => {
     } as never);
   };
 
+  // A real identity session over a throwaway store: the pincode call must carry
+  // the identity's own UA in `x-user-agent`, so a stub session would test nothing.
+  let session: IdentitySession;
+
   beforeEach(() => {
     mockedFetch.mockReset();
+    session = createTestSession('flipkart');
   });
 
   it('returns a trusted out-of-stock result WITHOUT a pincode echo, on the first try', async () => {
@@ -194,7 +201,7 @@ describe('fetchFlipkartPincodePricing (verification vs. stock)', () => {
       ),
     );
 
-    const result = await fetchFlipkartPincodePricing('/product/p/itm1?pid=P1', '122004');
+    const result = await fetchFlipkartPincodePricing(session, '/product/p/itm1?pid=P1', '122004');
 
     expect(result.pricing).toEqual({
       price: null,
@@ -220,7 +227,7 @@ describe('fetchFlipkartPincodePricing (verification vs. stock)', () => {
       ),
     );
 
-    const result = await fetchFlipkartPincodePricing('/product/p/itm2?pid=P2', '122004');
+    const result = await fetchFlipkartPincodePricing(session, '/product/p/itm2?pid=P2', '122004');
 
     expect(result.pricing).toEqual({
       price: 89990,
@@ -245,7 +252,7 @@ describe('fetchFlipkartPincodePricing (verification vs. stock)', () => {
       ),
     );
 
-    const result = await fetchFlipkartPincodePricing('/product/p/itm3?pid=P3', '122004');
+    const result = await fetchFlipkartPincodePricing(session, '/product/p/itm3?pid=P3', '122004');
 
     expect(result.pricing).toBeNull();
     expect(result.verified).toBe(false);

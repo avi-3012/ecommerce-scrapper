@@ -155,8 +155,9 @@ export class ExportController {
         'api status',
         'api price',
         'html price',
-        'exit ip',
-        'proxy session',
+        'identity',
+        'classification',
+        'classification reason',
         'duration ms',
         'failure reason',
         'failure detail',
@@ -203,8 +204,9 @@ export class ExportController {
             a.pincodeApiStatus ?? '',
             a.apiPrice,
             a.htmlPrice,
-            a.exitIp ?? '',
-            a.proxySession ?? '',
+            a.identityId ?? '',
+            a.classification ?? '',
+            a.classificationReason ?? '',
             a.durationMs ?? '',
             a.failureReason ?? '',
             a.failureDetail ?? '',
@@ -218,7 +220,7 @@ export class ExportController {
   }
 
   /**
-   * Per-product proxy bandwidth report (cost attribution). Aggregates the
+   * Per-product bandwidth report (cost attribution). Aggregates the
    * scrape-audit trail over the retention window: how many checks ran, how many
    * succeeded/failed, how many needed retries or the (expensive) browser tier,
    * and the WIRE bytes each product cost — with a per-kind breakdown

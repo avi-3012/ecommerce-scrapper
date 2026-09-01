@@ -1,5 +1,5 @@
 import type { PrismaClient, Product } from '@pricepulse/db';
-import type { AdapterRegistry, FetchFn } from '@pricepulse/adapters';
+import type { AdapterRegistry, FetchFn, IdentitySession } from '@pricepulse/adapters';
 import { resolveListingUrl } from '@pricepulse/adapters';
 import type { Marketplace, ProductSnapshot } from '@pricepulse/shared';
 import { performCheck } from './scrape/pipeline.js';
@@ -18,12 +18,34 @@ export type PreviewResult =
   | { kind: 'duplicate'; existingId: string; displayName: string; status: string }
   | { kind: 'unsupported'; detectedSite: string | null }
   | { kind: 'not_a_listing'; marketplace: Marketplace }
-  | { kind: 'fetch_failed'; reason: string; message: string };
+  | { kind: 'fetch_failed'; reason: string; message: string }
+  /**
+   * Every identity is busy, resting, or the IP is backing off. A preview is a
+   * live fetch on a capped line, so "not right now" is a real answer — far
+   * better than reaching for an anonymous request to get around it.
+   */
+  | { kind: 'no_capacity'; message: string }
+  /** The catalogue is at its configured hard cap. */
+  | { kind: 'at_capacity'; message: string; maxProducts: number; current: number };
 
 export interface RegistrationDeps {
   prisma: PrismaClient;
   registry: AdapterRegistry;
-  browserFetch?: FetchFn;
+  /**
+   * Borrow an identity for one preview fetch, and hand it back afterwards.
+   * Returns null when the pool has nothing free. Absent ⇒ no live fetching
+   * (the bulk-import path, which only ever resolves short links).
+   */
+  acquireIdentity?: (
+    marketplace: Marketplace,
+  ) => { session: IdentitySession; browserFetch?: FetchFn } | null;
+  releaseIdentity?: (session: IdentitySession) => void;
+  /**
+   * Hard cap on tracked products, from the scraping config. 0 or absent = no
+   * cap. Checked before the live preview fetch, so hitting the cap costs no
+   * marketplace request.
+   */
+  maxProducts?: number;
 }
 
 export interface RegisterParams {
@@ -54,8 +76,8 @@ export async function previewUrl(deps: RegistrationDeps, input: string): Promise
   // Any share/affiliate short link (fkrt.co, amzn.in, amzn.to, pwap.in, …)
   // carries no product id — follow its redirects to the real marketplace URL.
   // resolveListingUrl stops at the listing URL without loading the marketplace
-  // page, so it's fast, cheap on proxy bandwidth, and dodges the anti-bot; it
-  // routes through SCRAPER_PROXY_URL when set.
+  // page, so it's fast, cheap on bandwidth, and never touches the marketplace —
+  // which is why it needs no identity of its own.
   if (recognition.kind !== 'listing') {
     try {
       const final = await resolveListingUrl(
@@ -78,6 +100,25 @@ export async function previewUrl(deps: RegistrationDeps, input: string): Promise
     return { kind: 'not_a_listing', marketplace: recognition.marketplace };
   }
 
+  // Checked as early as possible: refusing at the cap should cost nothing —
+  // not a marketplace request from an IP that is by definition already at its
+  // limit, and not even a user lookup.
+  if (deps.maxProducts && deps.maxProducts > 0) {
+    const current = await prisma.product.count({ where: { status: { not: 'paused_user' } } });
+    if (current >= deps.maxProducts) {
+      return {
+        kind: 'at_capacity',
+        maxProducts: deps.maxProducts,
+        current,
+        message:
+          `Tracking ${current} of a maximum ${deps.maxProducts} products. This cap exists because ` +
+          `requests per minute is products ÷ interval — the connection can only serve so many. ` +
+          `Remove a product, lengthen the check interval, or raise limits.maxProducts in the ` +
+          `scraping config once you know the connection can carry it.`,
+      };
+    }
+  }
+
   const { user, settings } = await getUserWithSettings(prisma);
   const existing = await prisma.product.findUnique({
     where: { userId_canonicalUrl: { userId: user.id, canonicalUrl: recognition.canonicalUrl } },
@@ -92,10 +133,28 @@ export async function previewUrl(deps: RegistrationDeps, input: string): Promise
   }
 
   const adapter = registry.all().find((a) => a.marketplace === recognition.marketplace)!;
-  const outcome = await performCheck(adapter, recognition.canonicalUrl, {
-    browserFetch: deps.browserFetch,
-    pincode: settings.pincode,
-  });
+  const borrowed = deps.acquireIdentity?.(recognition.marketplace) ?? null;
+  if (!borrowed) {
+    return {
+      kind: 'no_capacity',
+      message:
+        'Every browser identity is busy or resting, or the connection is backing off. Try again in a minute.',
+    };
+  }
+
+  let outcome;
+  try {
+    outcome = await performCheck(adapter, recognition.canonicalUrl, {
+      session: borrowed.session,
+      browserFetch: borrowed.browserFetch,
+      pincode: settings.pincode,
+      // A preview has no history to compare against, so the 40%-jump check has
+      // nothing to say; the title/price checks still apply.
+      lastAcceptedPrice: null,
+    });
+  } finally {
+    deps.releaseIdentity?.(borrowed.session);
+  }
   if (!outcome.ok) {
     return { kind: 'fetch_failed', reason: outcome.error.reason, message: outcome.error.message };
   }
@@ -143,7 +202,14 @@ export async function registerProduct(
   await recordCheck(
     prisma,
     product,
-    { ok: true, snapshot: params.snapshot, tier: 'http', durationMs: 0, debug: {} },
+    {
+      ok: true,
+      classification: 'ok',
+      snapshot: params.snapshot,
+      tier: 'http',
+      durationMs: 0,
+      debug: {},
+    },
     settings,
   );
 
@@ -164,9 +230,9 @@ export async function resumeProduct(prisma: PrismaClient, id: string): Promise<P
 
 /**
  * Bulk-resume every paused product (auto- or user-paused) — the recovery path
- * after a systemic outage (e.g. an expired proxy) auto-pauses the whole
- * catalogue. Clears failure counters; the scheduler's own per-marketplace
- * batching and pacing spread the first checks, so this won't stampede.
+ * after a systemic outage auto-pauses the whole catalogue. Clears failure
+ * counters; the scheduler's cycle planner and the whole-IP cap spread the first
+ * checks across as many windows as the cap requires, so this won't stampede.
  * Returns how many were resumed.
  */
 export async function resumeAllProducts(prisma: PrismaClient): Promise<number> {

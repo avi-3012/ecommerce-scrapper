@@ -133,6 +133,9 @@ function offerHeaders(asin: string): Record<string, string> {
     'x-requested-with': 'XMLHttpRequest',
     accept: 'text/html,*/*',
     referer: `https://www.amazon.in/dp/${asin}`,
+    'sec-fetch-site': 'same-origin',
+    'sec-fetch-mode': 'cors',
+    'sec-fetch-dest': 'empty',
   };
 }
 
@@ -157,39 +160,42 @@ export async function collectAmazonOffers(
   html: string,
   asin: string,
   fetchFn: FetchFn,
-  cookie?: string,
   debug?: ScrapeDebug,
 ): Promise<RawOffer[] | null> {
   const $ = cheerio.load(html);
   const cards = extractOfferCards($);
   if (cards.length === 0) return null;
-  const headers = cookie ? { ...offerHeaders(asin), cookie } : offerHeaders(asin);
+  // No explicit cookie header: `fetchFn` is the identity's sub-request path, so
+  // its jar already carries whatever the glow flow and the page load left there.
+  const headers = offerHeaders(asin);
 
-  const perCard = await Promise.all(
-    cards.map(async (card): Promise<RawOffer[]> => {
-      // Single-offer card: the summary IS the one offer (endpoint returns empty).
-      if (card.count <= 1) {
-        return card.summary ? [{ label: card.title, description: card.summary }] : [];
-      }
-      // Multi-offer card: the individual offers must come from the side-sheet.
-      if (!card.config?.contentId) {
-        throw new CheckError(
-          'parse_failed',
-          `Amazon offer layout changed: "${card.title}" lists ${card.count} offers but exposes no side-sheet config`,
-        );
-      }
-      const url = buildSecondaryViewUrl(asin, card.config);
-      const page = await fetchFn(url, { timeoutMs: 15_000, headers, debug, kind: 'side_sheet' });
-      const items = parseSecondaryViewOffers(page.body);
-      if (items.length === 0) {
-        throw new CheckError(
-          'parse_failed',
-          `Amazon offer layout changed: "${card.title}" side-sheet yielded no individual offers`,
-        );
-      }
-      return items.map((description) => ({ label: card.title, description }));
-    }),
-  );
+  // Serialized rather than fanned out: one identity holds one request in flight
+  // at a time, which is both the rail and what a single browser tab does.
+  const perCard: RawOffer[][] = [];
+  for (const card of cards) {
+    // Single-offer card: the summary IS the one offer (endpoint returns empty).
+    if (card.count <= 1) {
+      perCard.push(card.summary ? [{ label: card.title, description: card.summary }] : []);
+      continue;
+    }
+    // Multi-offer card: the individual offers must come from the side-sheet.
+    if (!card.config?.contentId) {
+      throw new CheckError(
+        'parse_failed',
+        `Amazon offer layout changed: "${card.title}" lists ${card.count} offers but exposes no side-sheet config`,
+      );
+    }
+    const url = buildSecondaryViewUrl(asin, card.config);
+    const page = await fetchFn(url, { timeoutMs: 15_000, headers, debug, kind: 'side_sheet' });
+    const items = parseSecondaryViewOffers(page.body);
+    if (items.length === 0) {
+      throw new CheckError(
+        'parse_failed',
+        `Amazon offer layout changed: "${card.title}" side-sheet yielded no individual offers`,
+      );
+    }
+    perCard.push(items.map((description) => ({ label: card.title, description })));
+  }
 
   return [...couponOffers($), ...perCard.flat()];
 }

@@ -1,0 +1,37 @@
+# PricePulse worker — runs on a RESIDENTIAL connection, not in the cloud.
+#
+# This is the half of the system that talks to Amazon and Flipkart. It has no
+# proxies, so every request carries this machine's own ISP address. That is the
+# whole point: a residential IP is what makes the identity pool viable. Moving
+# this container to EC2 puts it on an AWS range and it will be blocked.
+#
+# It connects to the AWS database through an SSH tunnel opened on the host (see
+# docs/DEPLOY-AWS.md), so Postgres is never exposed to the internet.
+#
+# Run from the repo root on the home machine:
+#   docker compose --env-file deploy/.env.worker -f deploy/docker-compose.worker.yml up -d --build
+
+name: pricepulse-worker
+
+services:
+  worker:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.render
+    image: pricepulse-app:local
+    env_file: .env.worker
+    restart: unless-stopped
+    command: node apps/worker/dist/main.js
+    # Reaches the SSH tunnel listening on the host's loopback.
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    volumes:
+      # The identity pool. Long-lived (weeks) — losing it means every persona is
+      # brand new on an IP the marketplaces already know.
+      - identities:/repo/data/identities
+      # Live scraping config: tune pool size / cycle / IP budget and restart,
+      # no rebuild.
+      - ../config:/repo/config:ro
+
+volumes:
+  identities:

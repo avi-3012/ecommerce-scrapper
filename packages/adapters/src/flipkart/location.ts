@@ -1,7 +1,5 @@
-import { gotScraping } from 'got-scraping';
 import type { ScrapeDebug } from '@pricepulse/shared';
-import { scraperProxyUrl } from '../fetch/proxy.js';
-import { ACCEPT_ENCODING, decompressBody, recordProxyBytes } from '../fetch/bytes.js';
+import type { IdentitySession } from '../identity/session.js';
 
 /**
  * Flipkart location-aware pricing (pincode). Flipkart's PDP price/stock is
@@ -17,9 +15,6 @@ import { ACCEPT_ENCODING, decompressBody, recordProxyBytes } from '../fetch/byte
  * bank offers are NOT in this response, so they keep coming from the HTML page;
  * only price/MRP/stock are overridden.
  */
-
-const UA =
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
 
 /** Marker the adapter injects into the HTML so the parser can apply the override. */
 export const FLIPKART_PINCODE_MARKER = 'pp-flipkart-pincode';
@@ -389,7 +384,7 @@ export function extractAppliedPincode(json: string): string | null {
  *     price to get wrong, so there is nothing for the echo to protect.
  *  2. The listing IS buyable → the price is trusted only once Flipkart confirms
  *     it applied OUR pincode; otherwise retry, and never record an unverified
- *     price (the proxy exit region varies between checks, which flaps prices).
+ *     price (an unverified response carries the IP-default price, which flaps).
  *  3. EVERY response says no seller delivers to the pincode → out of stock. The
  *     product page shows "not deliverable to your location" with no other
  *     seller, so there is nothing to buy here: record it as out of stock (which
@@ -399,11 +394,11 @@ export function extractAppliedPincode(json: string): string | null {
  *     attempt (2) retries first and only a unanimous verdict lands here.
  */
 export async function fetchFlipkartPincodePricing(
+  session: IdentitySession,
   pageUri: string,
   pincode: string,
   debug?: ScrapeDebug,
 ): Promise<PincodeFetchResult> {
-  const proxyUrl = scraperProxyUrl();
   let status: number | null = null;
   let applied: string | null = null;
   let city: string | null = null;
@@ -420,32 +415,39 @@ export async function fetchFlipkartPincodePricing(
   for (let attempt = 0; attempt < 3; attempt++) {
     attempts++;
     try {
-      const res = await gotScraping({
-        url: 'https://1.rome.api.flipkart.com/api/4/page/fetch?cacheFirst=false',
-        method: 'POST',
-        timeout: { request: 25_000 },
-        throwHttpErrors: false,
-        // Meter wire bytes + force compression (the API also ships uncompressed
-        // by default — ~395 KB vs ~45 KB).
-        decompress: false,
-        ...(proxyUrl ? { proxyUrl, http2: false } : {}),
-        headers: {
-          'accept-encoding': ACCEPT_ENCODING,
-          'content-type': 'application/json',
-          origin: 'https://www.flipkart.com',
-          referer: `https://www.flipkart.com${pageUri}`,
-          'x-user-agent': `${UA} FKUA/website/42/website/Desktop`,
+      // The same XHR the product page fires after it loads, issued by the same
+      // identity: its jar, its User-Agent, its referer. `x-user-agent` is
+      // Flipkart's own client header and MUST echo the identity's UA — the old
+      // hardcoded Chrome/126 string disagreed with every request it rode on.
+      const res = await session.request(
+        'https://1.rome.api.flipkart.com/api/4/page/fetch?cacheFirst=false',
+        {
+          method: 'POST',
+          kind: 'pincode_api',
+          debug,
+          retry: attempt > 0,
+          navigation: false,
+          timeoutMs: 25_000,
+          headers: {
+            'content-type': 'application/json',
+            accept: 'application/json',
+            origin: 'https://www.flipkart.com',
+            referer: `https://www.flipkart.com${pageUri}`,
+            'x-user-agent': `${session.userAgent} FKUA/website/42/website/${session.identity.device === 'mobile' ? 'Mobile' : 'Desktop'}`,
+            'sec-fetch-site': 'same-site',
+            'sec-fetch-mode': 'cors',
+            'sec-fetch-dest': 'empty',
+          },
+          body: JSON.stringify({
+            pageUri,
+            pageContext: { trackingContext: {} },
+            locationContext: { pincode: Number(pincode), changed: true },
+          }),
         },
-        body: JSON.stringify({
-          pageUri,
-          pageContext: { trackingContext: {} },
-          locationContext: { pincode: Number(pincode), changed: true },
-        }),
-      });
-      recordProxyBytes(debug, 'pincode_api', res.rawBody.length, { retry: attempt > 0 });
+      );
       status = res.statusCode;
       if (res.statusCode === 200) {
-        const body = decompressBody(res.rawBody, res.headers['content-encoding']);
+        const body = res.body;
         const root = parseResponse(body);
         const detail = pricingDetailOf(root);
         // Capture the source-of-truth trail on every 200, even when unverified,

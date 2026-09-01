@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
 import { WORKER_CONFIG, loadConfig } from './config.js';
 import { PrismaService } from './prisma.service.js';
+import { IdentityService } from './identity.service.js';
+import { LogCaptureService } from './log-capture.service.js';
 import { HeartbeatService } from './heartbeat.service.js';
 import { CheckRunnerService } from './check-runner.service.js';
 import { SchedulerService } from './scheduler.service.js';
@@ -12,6 +14,8 @@ import { JobsService } from './jobs.service.js';
   providers: [
     { provide: WORKER_CONFIG, useFactory: loadConfig },
     PrismaService,
+    LogCaptureService,
+    IdentityService,
     HeartbeatService,
     CheckRunnerService,
     SchedulerService,

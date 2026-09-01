@@ -12,12 +12,12 @@ import { AlertsController } from './alerts.controller.js';
 import { SettingsController } from './settings.controller.js';
 import { NotificationsController } from './notifications.controller.js';
 import { StatusController } from './status.controller.js';
+import { DiagnosticsController } from './diagnostics.controller.js';
 import { ImportController } from './import/import.controller.js';
 import { ImportService } from './import/import.service.js';
 import { ExportController } from './export.controller.js';
 import { AnalyticsController } from './analytics.controller.js';
 import { EventsController, EventsService } from './events.js';
-import { BrowserService } from './browser.service.js';
 
 @Module({
   controllers: [
@@ -29,6 +29,7 @@ import { BrowserService } from './browser.service.js';
     SettingsController,
     NotificationsController,
     StatusController,
+    DiagnosticsController,
     ImportController,
     ExportController,
     AnalyticsController,
@@ -41,7 +42,6 @@ import { BrowserService } from './browser.service.js';
     JobsService,
     ImportService,
     EventsService,
-    BrowserService,
     { provide: APP_GUARD, useClass: AuthGuard },
   ],
   exports: [PrismaService],

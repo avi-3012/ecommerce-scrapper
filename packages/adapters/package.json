@@ -22,6 +22,8 @@
     "@pricepulse/shared": "workspace:*",
     "cheerio": "^1.2.0",
     "got-scraping": "^4.2.1",
+    "header-generator": "^2.1.82",
+    "http2-wrapper": "^2.2.1",
     "playwright": "^1.61.1"
   },
   "devDependencies": {

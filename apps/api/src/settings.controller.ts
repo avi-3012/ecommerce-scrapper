@@ -8,10 +8,14 @@ import type { ApiConfig } from './config.js';
 import { parseBody } from './validation.js';
 
 const patchSchema = z.object({
+  // Floor of 1 minute. What a connection can actually sustain is decided by the
+  // IP budget in config/scraping.json, not by this validator — the scheduler
+  // stretches its cycle to fit the budget whatever interval is asked for, so a
+  // floor here would only forbid asking.
   checkIntervalMinutes: z
     .number()
     .int()
-    .min(10)
+    .min(1)
     .max(24 * 60)
     .optional(),
   globalDropThresholdPct: z.number().min(0.1).max(99).optional(),

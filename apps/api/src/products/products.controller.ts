@@ -18,7 +18,6 @@ import {
   deleteProduct,
   deletionImpact,
   pauseProduct,
-  previewUrl,
   registerProduct,
   resumeAllProducts,
   resumeProduct,
@@ -28,7 +27,7 @@ import { MARKETPLACES, STOCK_STATUSES, PRODUCT_STATUSES } from '@pricepulse/shar
 import type { Prisma } from '@pricepulse/db';
 import { PrismaService } from '../prisma.service.js';
 import { JobsService } from '../jobs.service.js';
-import { BrowserService } from '../browser.service.js';
+import { loadScrapingConfigSafely } from '../scraping-config.js';
 import { parseBody } from '../validation.js';
 
 const offerSchema = z.object({ type: z.string(), description: z.string() });
@@ -53,11 +52,13 @@ const configurableFields = {
   notes: z.string().max(5000).optional(),
   tags: z.array(z.string().min(1).max(50)).max(20).optional(),
   categoryId: z.string().uuid().nullable().optional(),
-  // Per-product check interval; null clears it (falls back to the global default).
+  // Per-product check interval; null clears it (falls back to the global
+  // default). Floor of 1 minute — the IP budget, not this validator, decides
+  // what the connection can actually sustain.
   checkIntervalMinutes: z
     .number()
     .int()
-    .min(10)
+    .min(1)
     .max(24 * 60)
     .nullable()
     .optional(),
@@ -111,22 +112,53 @@ export class ProductsController {
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(JobsService) private readonly jobs: JobsService,
-    @Inject(BrowserService) private readonly browser: BrowserService,
   ) {}
 
   /**
    * FR-1.2/1.3/1.5: recognise → duplicate-check → live fetch → preview.
-   * Passes the browser tier so a tier-1 block (e.g. Flipkart anti-bot) can
-   * escalate to a real browser instead of hard-failing the preview (R-2).
+   *
+   * Delegated to the worker, which owns every outbound marketplace request.
+   * That keeps one identity pool and one IP budget in one process, and it is
+   * what lets the API run somewhere the marketplaces would never serve — a
+   * cloud host — without the preview being the one broken feature.
    */
   @Post('preview')
   @HttpCode(200)
   async preview(@Body() body: unknown): Promise<PreviewResult> {
     const { url } = parseBody(z.object({ url: z.string().min(1) }), body);
-    return previewUrl(
-      { prisma: this.prisma, registry: this.registry, browserFetch: await this.browser.get() },
-      url,
-    );
+
+    // The cap is checked HERE, before the job is queued, so hitting it costs no
+    // marketplace request at all. The worker enforces it too — this is the
+    // cheap early exit, not the only guard.
+    const atCapacity = await this.checkCapacity();
+    if (atCapacity) return atCapacity;
+
+    const result = await this.jobs.previewProduct(url);
+    if (result) return result;
+    return {
+      kind: 'no_capacity',
+      message:
+        'The scraper did not answer in time. It may be paused, restarting, or waiting on the ' +
+        'request budget — check the worker, then try again. Bulk import does not need it.',
+    };
+  }
+
+  /** The configured hard cap, or null when there is room. */
+  private async checkCapacity(): Promise<PreviewResult | null> {
+    const max = loadScrapingConfigSafely().limits.maxProducts;
+    if (!max || max <= 0) return null;
+    const current = await this.prisma.product.count({ where: { status: { not: 'paused_user' } } });
+    if (current < max) return null;
+    return {
+      kind: 'at_capacity',
+      maxProducts: max,
+      current,
+      message:
+        `Tracking ${current} of a maximum ${max} products. Requests per minute is ` +
+        `products ÷ interval, so this cap is what keeps the catalogue inside what the ` +
+        `connection can actually serve. Remove a product, lengthen the interval, or raise ` +
+        `limits.maxProducts in the scraping config.`,
+    };
   }
 
   /** FR-1.1/1.4: persist a confirmed preview and begin tracking. */

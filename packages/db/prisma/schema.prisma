@@ -221,6 +221,10 @@ model PriceHistory {
   failureDetail  String?         @map("failure_detail")
   extractionTier ExtractionTier? @map("extraction_tier")
   durationMs     Int?            @map("duration_ms")
+  // Which synthetic browser identity observed this. The successor to the proxy
+  // session: with a single IP there is no exit node to name, so this is what
+  // answers "who did the marketplace think it was talking to".
+  identityId     String?         @map("identity_id")
 
   product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
 
@@ -233,8 +237,9 @@ model PriceHistory {
 // ── Scrape audit — per-check diagnostics trail (debugging observability).
 // One row per check (success or failure) capturing the price-resolution path:
 // pincode requested vs applied, API price vs IP-default HTML price, which
-// source won, proxy session. Never load-bearing; written best-effort and
-// pruned by the worker after a short retention window.
+// source won, which browser identity fetched it and how the response was
+// classified. Never load-bearing; written best-effort and pruned by the worker
+// after a short retention window.
 
 model ScrapeAudit {
   id            BigInt          @id @default(autoincrement())
@@ -264,10 +269,16 @@ model ScrapeAudit {
   apiPrice         Decimal? @map("api_price") @db.Decimal(12, 2)
   htmlPrice        Decimal? @map("html_price") @db.Decimal(12, 2)
 
-  exitIp       String? @map("exit_ip")
-  proxySession String? @map("proxy_session")
+  // Which browser identity made this check, and how its response was classified
+  // (ok | suspect | hard_block) with the reason when it was not ok.
+  identityId           String? @map("identity_id")
+  classification       String?
+  classificationReason String? @map("classification_reason")
+  // Where the full response body was written when this check failed, relative
+  // to IDENTITY_DIR. The bytes live on disk, not here — an Amazon page is ~2 MB.
+  capturePath          String? @map("capture_path")
 
-  // Proxy bandwidth accounting (wire/compressed bytes actually transferred).
+  // Bandwidth accounting (wire/compressed bytes actually transferred).
   bytesWire     Int? @map("bytes_wire")
   proxyRequests Int? @map("proxy_requests")
   proxyRetries  Int? @map("proxy_retries")
@@ -279,6 +290,7 @@ model ScrapeAudit {
 
   @@index([productId, createdAt])
   @@index([createdAt])
+  @@index([identityId, createdAt])
   @@map("scrape_audit")
 }
 
@@ -380,6 +392,25 @@ model ImportBatch {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("import_batches")
+}
+
+// ── Worker log ring — recent worker output, readable by the API.
+//
+// The worker and the API are separate processes and, in the split deployment,
+// separate MACHINES: the API runs on a cloud host while the scraper runs on a
+// residential connection. They share a database and nothing else, so this table
+// is the only route by which worker output can reach a "download diagnostics"
+// button in the dashboard. Bounded and pruned; it is a ring buffer, not an
+// archive.
+
+model WorkerLog {
+  id      BigInt   @id @default(autoincrement())
+  at      DateTime @default(now()) @db.Timestamptz(6)
+  level   String
+  message String
+
+  @@index([at])
+  @@map("worker_log")
 }
 
 // ── System status (§3.7) — single-row health snapshot (NFR-2, UC-9) ──

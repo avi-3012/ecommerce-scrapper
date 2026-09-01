@@ -65,6 +65,15 @@ export function AddProductPage(): JSX.Element {
             `Couldn't read the listing right now (${result.message}). Try again in a minute.`,
           );
           break;
+        case 'at_capacity':
+          // Not a failure — a deliberate limit. Say what it is and how to change it.
+          setNote(result.message);
+          break;
+        case 'no_capacity':
+          // Not a failure: every browser identity is mid-fetch or resting, or
+          // the connection is backing off. Waiting is the correct response.
+          setNote(result.message);
+          break;
       }
     },
     onError: (err) => setNote(errorMessage(err)),

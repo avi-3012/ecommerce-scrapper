@@ -163,11 +163,36 @@ export interface SystemStatusReport {
     failed: number;
   } | null;
   successRate7d: string | null;
+  scraper: ScraperHealth | null;
   workerHeartbeatAt: string | null;
   workerStale: boolean;
 }
 
-/** Per-product proxy bandwidth (wire/compressed bytes) over a window. */
+/** The scraper's vitals, written by the worker each cycle. */
+export interface ScraperHealth {
+  identities: number;
+  cooling: number;
+  suspectsPending: number;
+  /** Requests per minute spendable right now (learned ceiling × diurnal curve). */
+  ratePerMin: number;
+  /** The ceiling this connection has been learned to tolerate at its busiest. */
+  learnedPerMin: number;
+  mode: 'fixed' | 'adaptive';
+  /** Share of the learned ceiling in use at this hour (the diurnal curve). */
+  diurnalFactor: number;
+  usedLastHour: number;
+  usedLastMinute: number;
+  /** Percentages, already scaled for display. */
+  blockRatio: number;
+  congestionRatio: number;
+  /** Responses received but not parseable — usually our bug, not theirs. */
+  unreadable: number;
+  backoffLevel: number;
+  pausedUntil: number | null;
+  isNight: boolean;
+}
+
+/** Per-product bandwidth (wire/compressed bytes) over a window. */
 export interface ProxyUsageProduct {
   productId: string;
   displayName: string;
@@ -241,7 +266,9 @@ export type PreviewResult =
   | { kind: 'duplicate'; existingId: string; displayName: string; status: string }
   | { kind: 'unsupported'; detectedSite: string | null }
   | { kind: 'not_a_listing'; marketplace: Marketplace }
-  | { kind: 'fetch_failed'; reason: string; message: string };
+  | { kind: 'fetch_failed'; reason: string; message: string }
+  | { kind: 'no_capacity'; message: string }
+  | { kind: 'at_capacity'; message: string; maxProducts: number; current: number };
 
 export interface ChartData {
   points: Array<{ t: string; price: number | null; mrp: number | null; outOfStock: boolean }>;

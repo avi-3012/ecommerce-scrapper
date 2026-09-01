@@ -1,0 +1,70 @@
+{
+  "$comment": [
+    "Scraping configuration: the identity pool and the whole-IP request budget.",
+    "All traffic leaves from this machine's own ISP connection — no proxies.",
+    "See README, section 'Identity pool & IP caps'. Every key is optional.",
+    "Override the file path with SCRAPING_CONFIG=/path/to/file.json.",
+    "",
+    "This file holds the CONSERVATIVE defaults: a small pool of deep, sticky",
+    "personas under a fixed budget. config/scraping.local.json is the",
+    "high-throughput profile — point SCRAPING_CONFIG at it to use that instead."
+  ],
+  "connection": {
+    "$comment": "home | office. Affects warnings only, never behaviour.",
+    "type": "home"
+  },
+  "identities": {
+    "$comment": [
+      "count: pool size. Each identity is a consistent browser persona with its",
+      "own headers, TLS profile, cookie jar and referer chain.",
+      "rotation: 'sticky' keeps a product with the identity that fetched it last;",
+      "'per-request' draws a different identity for every fetch.",
+      "minGapMs: minimum spacing between ONE identity's requests. This is what",
+      "bounds pool throughput: capacity ≈ count × (60000 / minGapMs.max) per min."
+    ],
+    "count": 8,
+    "rotation": "sticky",
+    "minGapMs": {
+      "min": 60000,
+      "max": 150000
+    }
+  },
+  "cycle": {
+    "$comment": "Requested window per cycle, seconds. Stretches if the budget cannot fit the products.",
+    "minSec": 120,
+    "maxSec": 180
+  },
+  "ipCap": {
+    "$comment": [
+      "mode 'fixed': dayPerMin/nightPerMin are hard limits, never exceeded.",
+      "mode 'adaptive': dayPerMin is only the STARTING rate; the controller climbs",
+      "while clean and multiplies by decreaseFactor on any hard block."
+    ],
+    "mode": "fixed",
+    "dayPerMin": 6,
+    "nightPerMin": 2,
+    "adaptive": {
+      "startPerMin": 6,
+      "maxPerMin": 240,
+      "minPerMin": 2,
+      "increaseEverySec": 120,
+      "decreaseFactor": 0.5,
+      "tolerateBlockRatio": 0.02
+    }
+  },
+  "night": {
+    "$comment": "IST hours during which the night ratio applies and the pool thins out.",
+    "startIST": "00:00",
+    "endIST": "07:00"
+  },
+  "$comment_noiseRatio": "Fraction of fetches that browse a homepage/search page INSTEAD of a product, varied +/-50% at runtime. Real sessions are mostly NOT product pages; a feed that is ~98% product detail pages has a composition no household produces.",
+  "noiseRatio": 0.12,
+  "$comment_maxConcurrent": "Requests in flight at once across the pool. One per identity regardless.",
+  "maxConcurrent": 2,
+  "limits": {
+    "$comment": "refuseWhenStretched: stop at boot when the catalogue stretches the cycle past 3x its requested length.",
+    "refuseWhenStretched": true
+  },
+  "funnelRatio": 0.12,
+  "$comment_funnelRatio": "Fraction of product fetches that arrive via a search results page (the most common real path to a PDP). Costs one EXTRA request each — volume is what gets metered, so this buys traffic shape at a price."
+}

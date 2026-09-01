@@ -44,6 +44,11 @@ export class StatusController {
           }
         : null,
       successRate7d: status?.successRate7d ?? null,
+      // The scraper's own vitals, written by the worker each cycle: how fast it
+      // is allowed to go right now, how much of that it used, and whether the
+      // marketplaces are pushing back. Without this the only way to know the
+      // connection is in trouble is to notice prices going stale.
+      scraper: (status?.scraperHealth as Record<string, unknown> | undefined) ?? null,
       workerHeartbeatAt: heartbeatAt,
       workerStale,
     };

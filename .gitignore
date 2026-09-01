@@ -24,4 +24,13 @@ dist/
 # test artifacts
 coverage/
 
+# CSV/XLSX exports pulled from the running app — runtime data, not source.
+# These are multi-megabyte audit dumps; they belong in a download folder.
+pricepulse-*.csv
+
+# identity pool: cookie jars, per-identity browser profiles, captured block
+# bodies, IP backoff state. Runtime state, never committed — and the jars in
+# particular are session material.
+data/
+
 # prisma generated client lives in node_modules; nothing extra to ignore

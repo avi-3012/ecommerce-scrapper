@@ -3,8 +3,8 @@
  * through the fetch pipeline: adapters write the decisions they make while
  * resolving a price so we can later explain WHY a recorded price was what it
  * was — WITHOUT re-scraping. The goal is source-of-truth credibility: from one
- * audit row you can reconstruct the exit IP the check used, the pincode
- * requested vs actually applied, every price signal seen (page JSON-LD,
+ * audit row you can reconstruct which browser identity the check used, the
+ * pincode requested vs actually applied, every price signal seen (page JSON-LD,
  * embedded JSON, the localized API, and the raw API bytes), which one won, and
  * whether the page even described the product we expected.
  *
@@ -18,20 +18,31 @@ export interface PriceCandidate {
   value: number | null;
 }
 
-/** Which proxied request a byte tally belongs to. */
+/**
+ * Which request a byte tally belongs to. `warmup` and `noise` are the identity
+ * layer's non-product page loads — a fresh identity's first homepage visit, and
+ * the occasional homepage/search browse that keeps the traffic from being 100%
+ * product detail pages.
+ */
 export type ProxyRequestKind =
   | 'main_page' // the listing page fetch (tier-1 HTTP or tier-2 browser)
   | 'pincode_api' // Flipkart page/fetch localisation calls
   | 'cookie_mint' // Amazon glow-location cookie mint (seed page)
   | 'side_sheet' // Amazon offer side-sheet AJAX
-  | 'exit_ip' // the exit-IP echo
+  | 'warmup' // an identity's first homepage visit to a site
+  | 'noise' // a homepage/search browse in place of a product fetch
   | 'resolve'; // short-link redirect resolution
 
-/** Per-check proxy bandwidth tally — wire (compressed) bytes actually transferred. */
+/**
+ * Per-check bandwidth tally — wire (compressed) bytes actually transferred.
+ * Since the proxy layer was removed these are ISP bytes rather than billed
+ * proxy bytes, but per-product attribution is still the number that answers
+ * "which products are expensive to watch", so the accounting stays.
+ */
 export interface ProxyUsage {
-  /** Total compressed bytes over the proxy this check. */
+  /** Total compressed bytes fetched this check. */
   wireBytes: number;
-  /** Number of proxied requests made. */
+  /** Number of requests made. */
   requests: number;
   /** How many of those were retries (localisation/cookie re-attempts). */
   retries: number;
@@ -40,17 +51,26 @@ export interface ProxyUsage {
 }
 
 export interface ScrapeDebug {
-  /** Per-check proxy bandwidth (wire bytes), for cost attribution per product. */
+  /** Per-check bandwidth (wire bytes), for cost attribution per product. */
   proxy?: ProxyUsage;
-  /** Proxy region/sticky-session token in effect (never credentials). */
-  proxySession?: string | null;
   /**
-   * The ACTUAL outbound IP this check used (resolved through the same proxy
-   * session). The sticky-session token is fixed, but the exit IP rotates and
-   * its region drives Flipkart's IP-default price — so this is the field that
-   * proves (or disproves) region-based price flapping.
+   * Which synthetic browser identity made this check. The successor to the
+   * proxy session token: with one IP there is no exit node to identify, so the
+   * question "what did the marketplace think it was talking to" is answered
+   * entirely by the identity — its headers, cookie jar and referer chain.
    */
-  exitIp?: string | null;
+  identityId?: string | null;
+  /** How the raw response was classified: ok | suspect | hard_block. */
+  classification?: string | null;
+  /** Why, when the classification was not `ok` (e.g. 'amazon_captcha'). */
+  classificationReason?: string | null;
+  /**
+   * Where the full response body was written when this check failed, relative
+   * to IDENTITY_DIR (e.g. `failures/2026-08-27/…-parse_failed-1a2b3c4d.html.gz`).
+   * The bytes live on disk rather than in this blob — an Amazon page is ~2 MB,
+   * which is not something to put in a JSON column.
+   */
+  capturePath?: string | null;
   /** The delivery pincode we asked the marketplace to price for (null = none set). */
   pincodeRequested?: string | null;
 

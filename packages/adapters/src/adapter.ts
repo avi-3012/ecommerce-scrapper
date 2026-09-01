@@ -1,14 +1,24 @@
 import type { ExtractionTier, Marketplace, ProductSnapshot, ScrapeDebug } from '@pricepulse/shared';
 import type { FetchFn } from './fetch/http.js';
+import type { IdentitySession } from './identity/session.js';
 
 /** Per-check fetch options threaded from user settings. */
 export interface FetchOptions {
+  /**
+   * The browser identity making this check. Every request an adapter issues —
+   * the listing page, the localisation call, the offer side-sheet — goes out
+   * through this one session, so they all share a TLS profile, a header set, a
+   * cookie jar and a referer chain. It is required: an adapter has no other way
+   * to reach the network, which is what keeps a stray anonymous request from
+   * quietly reintroducing the fingerprint mismatch this layer removed.
+   */
+  session: IdentitySession;
   /** Delivery pincode for location-aware scraping (Amazon localises by it). */
   pincode?: string | null;
   /**
    * Optional mutable diagnostics sink. When present, the adapter records its
    * price-resolution decisions here (pincode requested/applied, API vs HTML
-   * price, proxy session) for the per-check audit trail. Never load-bearing.
+   * price, identity used) for the per-check audit trail. Never load-bearing.
    */
   debug?: ScrapeDebug;
   /**
@@ -16,7 +26,7 @@ export interface FetchOptions {
    * headless-browser fetch here). Location handling — Flipkart's page/fetch API
    * call, Amazon's glow cookie — is UNCHANGED and still runs, so a check that
    * escalates to the browser is localised exactly like a tier-1 check. Absent ⇒
-   * the adapter's default tier-1 HTTP fetch. Never let the browser tier bypass
+   * the identity session's own page fetch. Never let the browser tier bypass
    * localisation (that recorded the IP-default price and flapped alerts).
    */
   pageFetch?: FetchFn;
@@ -57,7 +67,7 @@ export interface MarketplaceAdapter {
   recognize(url: URL): Exclude<UrlRecognition, { kind: 'unsupported' }>;
 
   /** Fetch the listing page (tier-1 HTTP; tier-2 escalation handled by the pipeline). */
-  fetch(canonicalUrl: string, opts?: FetchOptions): Promise<RawPage>;
+  fetch(canonicalUrl: string, opts: FetchOptions): Promise<RawPage>;
 
   /** Parse a fetched page into the normalized snapshot; throws a categorised error on failure. */
   parse(page: RawPage): ProductSnapshot;

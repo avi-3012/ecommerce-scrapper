@@ -11,7 +11,8 @@ import {
   formatInr,
   formatRelativeTime,
 } from '@pricepulse/shared';
-import type { FailureReason } from '@pricepulse/shared';
+import type { FailureReason, Marketplace } from '@pricepulse/shared';
+import type { FetchFn, IdentitySession } from '@pricepulse/adapters';
 import { PrismaService } from '../prisma.service.js';
 import { TelegramService } from './telegram.service.js';
 import { CheckRunnerService } from '../check-runner.service.js';
@@ -99,7 +100,9 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
         {
           prisma: this.prisma,
           registry: this.runner.registry,
-          browserFetch: this.runner.browserFetch,
+          maxProducts: this.runner.identities.config.limits.maxProducts,
+          acquireIdentity: (marketplace) => this.acquireIdentity(marketplace),
+          releaseIdentity: (session) => this.runner.identities.release(session),
         },
         url,
       );
@@ -311,7 +314,9 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
           {
             prisma: this.prisma,
             registry: this.runner.registry,
-            browserFetch: this.runner.browserFetch,
+            maxProducts: this.runner.identities.config.limits.maxProducts,
+            acquireIdentity: (marketplace) => this.acquireIdentity(marketplace),
+            releaseIdentity: (session) => this.runner.identities.release(session),
           },
           text,
         );
@@ -320,6 +325,22 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
       }
       await ctx.reply(`I didn't understand that. ${helpText()}`);
     });
+  }
+
+  /**
+   * Borrow an identity for a bot-initiated preview. A /add is a person asking
+   * for one page, which is the most ordinary traffic this line produces — but it
+   * still goes through the pool, so it is paced and counted like everything else.
+   */
+  private acquireIdentity(
+    marketplace: Marketplace,
+  ): { session: IdentitySession; browserFetch?: FetchFn } | null {
+    const session = this.runner.identities.acquire(marketplace);
+    if (!session) return null;
+    return {
+      session,
+      browserFetch: this.runner.identities.browserFetchFor(session.identity),
+    };
   }
 
   private async replyToPreview(ctx: Context, result: PreviewResult): Promise<void> {

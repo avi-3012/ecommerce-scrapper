@@ -16,9 +16,13 @@ import {
 } from '../ui.js';
 
 /**
- * Where the residential-proxy bandwidth goes, per product. Wire (compressed)
- * bytes — what the proxy actually bills — broken down by request kind, so a
+ * Where the scraping bandwidth goes, per product. Wire (compressed) bytes —
+ * what actually crossed the connection — broken down by request kind, so a
  * single expensive product (or the browser tier) is obvious at a glance.
+ *
+ * These were proxy-billed bytes before the identity migration; they are now
+ * ordinary ISP bytes. Per-product attribution is still the number that answers
+ * "which products are expensive to watch", so the report stayed.
  */
 
 /** Fixed categorical order (validated CVD-safe, light+dark) — never reordered. */

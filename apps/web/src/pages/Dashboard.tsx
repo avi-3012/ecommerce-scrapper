@@ -1,17 +1,19 @@
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
+import { useState } from 'react';
 import {
   ArrowDownRight,
   Bell,
   CheckCircle2,
   Clock,
+  Download,
   Package,
   Plus,
   TriangleAlert,
   XCircle,
 } from 'lucide-react';
 import { api, inr, relTime } from '../api.js';
-import type { AlertRow, Paged, SystemStatusReport } from '../api.js';
+import type { AlertRow, Paged, ScraperHealth, SystemStatusReport } from '../api.js';
 import { Button, Card, CardSkeleton, EmptyState, Skeleton, StatCard } from '../ui.js';
 
 /** Dashboard home (WP-2.3): the UC-9 glance — health banner, stats, activity. */
@@ -71,6 +73,8 @@ export function DashboardPage(): JSX.Element {
           sub={status.successRate7d !== null ? `${status.successRate7d}% success (7d)` : undefined}
         />
       </div>
+
+      {status.scraper ? <ScraperPanel health={status.scraper} /> : null}
 
       <section>
         <div className="mb-2 flex items-center justify-between">
@@ -215,4 +219,149 @@ export function alertSummary(a: AlertRow): string {
     default:
       return a.type;
   }
+}
+
+/**
+ * The scraper's vitals.
+ *
+ * Everything here is a property of the CONNECTION rather than of any product,
+ * and none of it was visible from the dashboard before — the only way to know
+ * the marketplaces had started pushing back was to notice prices going stale
+ * days later. The two ratios are the ones that matter: blocks mean they are
+ * refusing us, congestion means they are struggling to serve us, and the
+ * responses are different.
+ */
+function ScraperPanel({ health }: { health: ScraperHealth }): JSX.Element {
+  const pausedUntil = health.pausedUntil;
+  const paused = pausedUntil !== null && pausedUntil > Date.now();
+  const tone =
+    paused || health.blockRatio > 2 ? 'danger' : health.congestionRatio > 15 ? 'warning' : 'ok';
+  const toneClass =
+    tone === 'danger'
+      ? 'border-danger bg-danger-subtle'
+      : tone === 'warning'
+        ? 'border-warning bg-warning-subtle'
+        : 'border-border bg-surface';
+
+  return (
+    <section>
+      <div className="mb-2 flex items-center justify-between">
+        <h2 className="font-medium text-fg">Scraper</h2>
+        <DiagnosticsButton />
+      </div>
+      <div className={`rounded-lg border p-4 ${toneClass}`}>
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
+          <Metric
+            label="Rate"
+            value={`${health.ratePerMin}/min`}
+            sub={
+              health.mode === 'adaptive' ? `ceiling ${health.learnedPerMin}/min` : 'fixed budget'
+            }
+          />
+          <Metric
+            label="Used"
+            value={`${health.usedLastMinute}/min`}
+            sub={`${health.usedLastHour} in the last hour`}
+          />
+          <Metric
+            label="Identities"
+            value={health.identities}
+            sub={health.cooling > 0 ? `${health.cooling} cooling` : 'all in service'}
+          />
+          <Metric
+            label="Blocked"
+            value={`${health.blockRatio}%`}
+            sub="they refused us"
+            danger={health.blockRatio > 2}
+          />
+          <Metric
+            label="Congestion"
+            value={`${health.congestionRatio}%`}
+            sub="timeouts / errors"
+            danger={health.congestionRatio > 15}
+          />
+          <Metric
+            label="Unreadable"
+            value={health.unreadable}
+            sub="parsed nothing"
+            danger={health.unreadable > 20}
+          />
+        </div>
+        {paused ? (
+          <p className="mt-3 text-sm font-medium text-danger-fg">
+            Fetching is paused until {new Date(pausedUntil!).toLocaleTimeString()} — the connection
+            is backing off after repeated blocks (level {health.backoffLevel}).
+          </p>
+        ) : (
+          <p className="mt-3 text-xs text-fg-muted">
+            {health.isNight ? 'Night pacing' : 'Daytime pacing'} · running at{' '}
+            {Math.round(health.diurnalFactor * 100)}% of the learned ceiling for this hour
+            {health.suspectsPending > 0
+              ? ` · ${health.suspectsPending} price${health.suspectsPending === 1 ? '' : 's'} awaiting a second opinion`
+              : ''}
+          </p>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function Metric({
+  label,
+  value,
+  sub,
+  danger = false,
+}: {
+  label: string;
+  value: string | number;
+  sub?: string;
+  danger?: boolean;
+}): JSX.Element {
+  return (
+    <div>
+      <div className="text-xs uppercase tracking-wide text-fg-muted">{label}</div>
+      <div className={`text-lg font-semibold ${danger ? 'text-danger-fg' : 'text-fg'}`}>
+        {value}
+      </div>
+      {sub ? <div className="text-xs text-fg-muted">{sub}</div> : null}
+    </div>
+  );
+}
+
+/**
+ * One button, one file, everything needed to diagnose a broken run.
+ *
+ * A plain link rather than a fetch: the endpoint sets Content-Disposition, so
+ * the browser saves it directly and there is no blob to build, no memory spike
+ * on a large bundle, and no way for a failed download to leave the page in a
+ * half-broken state.
+ */
+function DiagnosticsButton(): JSX.Element {
+  const [hours, setHours] = useState(6);
+  return (
+    <div className="flex items-center gap-2">
+      <label className="text-xs text-fg-muted" htmlFor="diag-window">
+        last
+      </label>
+      <select
+        id="diag-window"
+        className="rounded border border-border bg-surface px-2 py-1 text-xs text-fg"
+        value={hours}
+        onChange={(e) => setHours(Number(e.target.value))}
+      >
+        <option value={1}>1 hour</option>
+        <option value={6}>6 hours</option>
+        <option value={24}>24 hours</option>
+        <option value={72}>3 days</option>
+      </select>
+      <a
+        href={`/api/diagnostics?hours=${hours}`}
+        download
+        className="inline-flex items-center gap-1.5 rounded-md border border-border bg-surface px-3 py-1.5 text-sm font-medium text-fg hover:bg-surface-2"
+      >
+        <Download className="size-4" aria-hidden />
+        Download logs
+      </a>
+    </div>
+  );
 }

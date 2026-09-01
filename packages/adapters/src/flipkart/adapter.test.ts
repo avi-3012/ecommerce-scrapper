@@ -2,15 +2,21 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { gotScraping } from 'got-scraping';
 import type { FetchFn } from '../fetch/http.js';
 import { FlipkartAdapter } from './adapter.js';
+import { createTestSession } from '../identity/testing.js';
+import type { IdentitySession } from '../identity/session.js';
 
 vi.mock('got-scraping', () => ({ gotScraping: vi.fn() }));
 const mockedGot = vi.mocked(gotScraping);
 
-// The exit-IP echo also goes through gotScraping; disable it so the mock sees
-// only the page/fetch calls under test.
-process.env.SCRAPE_AUDIT_EXIT_IP = '0';
+// Every check runs as a real identity, so the adapter gets a real session over a
+// throwaway store. Only the page/fetch API calls reach the mocked transport —
+// the listing page itself is supplied via `pageFetch` (the browser tier).
+let session: IdentitySession;
 
-beforeEach(() => mockedGot.mockReset());
+beforeEach(() => {
+  mockedGot.mockReset();
+  session = createTestSession('flipkart');
+});
 
 /** A got response as our code reads it: raw (compressed) body + headers, identity here. */
 const res = (body: string) =>
@@ -113,7 +119,7 @@ describe('FlipkartAdapter — localisation is tier-independent', () => {
     const adapter = new FlipkartAdapter();
     const page = await adapter.fetch(
       'https://www.flipkart.com/product/p/itm1234567890abc?pid=MOBHFN6YKGBPYJZD',
-      { pincode: '122004', pageFetch: browserFetch },
+      { session, pincode: '122004', pageFetch: browserFetch },
     );
     const snap = adapter.parse(page);
 
@@ -141,6 +147,7 @@ describe('FlipkartAdapter — localisation is tier-independent', () => {
     const adapter = new FlipkartAdapter();
     await expect(
       adapter.fetch('https://www.flipkart.com/product/p/itm1234567890abc?pid=MOBHFN6YKGBPYJZD', {
+        session,
         pincode: '122004',
         pageFetch: browserFetch,
       }),
@@ -167,7 +174,7 @@ describe('FlipkartAdapter — a non-delivering seller never sets the price', () 
 
     const adapter = new FlipkartAdapter();
     const debug = {};
-    const page = await adapter.fetch(URL_, { pincode: '122004', pageFetch, debug });
+    const page = await adapter.fetch(URL_, { session, pincode: '122004', pageFetch, debug });
     const snap = adapter.parse(page);
 
     expect(snap.price).toBe(114990); // the localised price, never the ₹76,990 default
@@ -183,7 +190,7 @@ describe('FlipkartAdapter — a non-delivering seller never sets the price', () 
 
     const adapter = new FlipkartAdapter();
     const debug: { pincode?: { locationErrorCode?: string | null; outOfStock?: boolean } } = {};
-    const page = await adapter.fetch(URL_, { pincode: '122004', pageFetch, debug });
+    const page = await adapter.fetch(URL_, { session, pincode: '122004', pageFetch, debug });
     const snap = adapter.parse(page);
 
     expect(snap.stockStatus).toBe('out_of_stock');
@@ -201,7 +208,9 @@ describe('FlipkartAdapter — a non-delivering seller never sets the price', () 
       .mockResolvedValue(res(localizedApiBody));
 
     const adapter = new FlipkartAdapter();
-    const snap = adapter.parse(await adapter.fetch(URL_, { pincode: '122004', pageFetch }));
+    const snap = adapter.parse(
+      await adapter.fetch(URL_, { session, pincode: '122004', pageFetch }),
+    );
 
     expect(snap.stockStatus).toBe('in_stock');
     expect(snap.price).toBe(114990);

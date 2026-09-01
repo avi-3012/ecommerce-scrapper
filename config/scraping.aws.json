@@ -1,0 +1,91 @@
+{
+  "$comment": [
+    "FULL-AWS profile, tuned for a HARD CAP of 50 products at a 1-minute",
+    "interval, 24/7. Everything (api + db + worker) runs on the EC2 instance.",
+    "",
+    "The arithmetic this is built around:",
+    "  50 product page loads/min",
+    "  + ~4/min  search-page approaches (funnelRatio 0.08 adds one load each)",
+    "  + ~2/min  Amazon glow-cookie mints (cached 20 min per identity)",
+    "  = ~56 req/min sustained demand",
+    "  vs 48 identities x (60s / 40s avg gap) = 72/min pool capacity  -> 28% headroom",
+    "  each identity therefore makes ~1.2 requests/min, which is human pacing",
+    "",
+    "AWS publishes its own IP ranges (ip-ranges.amazonaws.com/ip-ranges.json), so",
+    "this address is known to be a datacenter. Whether it is GRANTED 56/min is not",
+    "knowable from here: run `ramp` on day one and compare.",
+    "",
+    "If 56/min proves too high, in order of what it costs you:",
+    "  1. tiers.*Multiplier > 1   - static products stop being polled every minute",
+    "  2. diurnal.enabled = true  - stop running flat at 4 a.m.",
+    "  3. raise the interval      - `plan` gives the number that fits"
+  ],
+  "connection": {
+    "$comment": "A datacenter line, not a household. Silences the home-pool warning.",
+    "type": "office"
+  },
+  "identities": {
+    "$comment": [
+      "48 identities for 50 products means each makes ~1.2 requests per minute —",
+      "slow enough to be a plausible person. Capacity is count x (60000/avg gap) =",
+      "72/min against ~56/min of demand."
+    ],
+    "count": 48,
+    "rotation": "per-request",
+    "minGapMs": {
+      "min": 30000,
+      "max": 50000
+    }
+  },
+  "cycle": {
+    "$comment": "One-minute cadence, jittered.",
+    "minSec": 55,
+    "maxSec": 65
+  },
+  "ipCap": {
+    "$comment": [
+      "Adaptive, starting just above the 56/min this catalogue needs so the",
+      "controller is not immediately throttling a healthy connection. maxPerMin 90",
+      "leaves room to climb if the IP turns out tolerant; minPerMin 8 keeps some",
+      "data flowing if it does not."
+    ],
+    "mode": "adaptive",
+    "dayPerMin": 60,
+    "nightPerMin": 60,
+    "adaptive": {
+      "startPerMin": 60,
+      "maxPerMin": 90,
+      "minPerMin": 8,
+      "increaseEverySec": 120,
+      "decreaseFactor": 0.75,
+      "tolerateBlockRatio": 0.05
+    }
+  },
+  "night": {
+    "$comment": "Unused while diurnal.enabled is false.",
+    "startIST": "00:00",
+    "endIST": "07:00"
+  },
+  "diurnal": {
+    "$comment": "OFF: 24/7 flat rate, by request. This is the most machine-like property traffic can have — set true if blocking climbs.",
+    "enabled": false
+  },
+  "tiers": {
+    "$comment": "OFF: all 50 products polled every minute regardless of whether their price moves. Raising these is the cheapest lever if the IP pushes back.",
+    "warmAfterHours": 6,
+    "coldAfterHours": 72,
+    "warmMultiplier": 1,
+    "coldMultiplier": 1
+  },
+  "$comment_noiseRatio": "Fraction of fetches that browse a homepage/search page INSTEAD of a product (replaces, does not add).",
+  "noiseRatio": 0.06,
+  "$comment_funnelRatio": "Fraction of product fetches that arrive via a search results page. ADDS one request each — already counted in the arithmetic above.",
+  "funnelRatio": 0.08,
+  "$comment_maxConcurrent": "56/min is ~0.93/s; at up to 8s per fetch that needs ~7.5 in flight. 10 gives margin without bursting.",
+  "maxConcurrent": 10,
+  "limits": {
+    "$comment": "maxProducts is a HARD CAP: registration refuses the 51st product. The catalogue silently outgrowing what the connection can serve is the exact failure this prevents.",
+    "maxProducts": 50,
+    "refuseWhenStretched": false
+  }
+}

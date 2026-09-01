@@ -10,8 +10,8 @@ import type { CheckOutcome } from './pipeline.js';
  * errors are swallowed with a log.
  *
  * This is the primary tool for diagnosing location-aware price flapping. From
- * one row you can see the exit IP the check used, whether a pincode was
- * requested and whether the marketplace applied it, every price signal seen
+ * one row you can see which browser identity the check used, whether a pincode
+ * was requested and whether the marketplace applied it, every price signal seen
  * (JSON-LD / embedded JSON / localized API, with the raw API bytes), which
  * source the recorded price came from, and whether the page even described the
  * product we expected.
@@ -24,7 +24,9 @@ export async function recordScrapeAudit(
 ): Promise<void> {
   try {
     const debug = { ...(outcome.debug ?? {}) };
-    const snapshot = outcome.ok ? outcome.snapshot : null;
+    // A SUSPECT outcome carries a snapshot too, and it is exactly the one worth
+    // keeping: the audit row is the only record of what a rejected page claimed.
+    const snapshot = 'snapshot' in outcome ? outcome.snapshot : null;
     const provenance = snapshot?.provenance ?? {};
     const offers = (snapshot?.offers ?? []) as Offer[];
     const pincode = debug.pincode ?? {};
@@ -66,8 +68,10 @@ export async function recordScrapeAudit(
         pincodeApiStatus: pincode.apiStatus ?? null,
         apiPrice: pincode.apiPrice ?? null,
         htmlPrice: htmlPrice !== null && Number.isFinite(htmlPrice) ? htmlPrice : null,
-        exitIp: debug.exitIp ?? null,
-        proxySession: debug.proxySession ?? null,
+        identityId: debug.identityId ?? null,
+        classification: debug.classification ?? null,
+        classificationReason: debug.classificationReason ?? null,
+        capturePath: debug.capturePath ?? null,
         bytesWire: debug.proxy?.wireBytes ?? null,
         proxyRequests: debug.proxy?.requests ?? null,
         proxyRetries: debug.proxy?.retries ?? null,

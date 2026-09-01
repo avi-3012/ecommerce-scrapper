@@ -1,0 +1,74 @@
+{
+  "$comment": [
+    "Scraping configuration: the identity pool and the whole-IP request budget.",
+    "All traffic leaves from this machine's own ISP connection — no proxies.",
+    "See README, section 'Identity pool & IP caps'. Every key is optional.",
+    "Override the file path with SCRAPING_CONFIG=/path/to/file.json.",
+    "",
+    "This file is the LOCAL HIGH-THROUGHPUT profile: per-request identity",
+    "rotation, a large pool, and an adaptive rate that finds this connection's",
+    "real ceiling instead of assuming one. config/scraping.conservative.json",
+    "holds the cautious defaults if you want to fall back to them."
+  ],
+  "connection": {
+    "$comment": "home | office. Affects warnings only, never behaviour.",
+    "type": "home"
+  },
+  "identities": {
+    "$comment": [
+      "count: pool size. Each identity is a consistent browser persona with its",
+      "own headers, TLS profile, cookie jar and referer chain.",
+      "rotation: 'per-request' draws a different identity for every fetch;",
+      "'sticky' keeps a product with the identity that fetched it last.",
+      "minGapMs: minimum spacing between ONE identity's requests. This is what",
+      "bounds pool throughput: capacity ≈ count × (60000 / minGapMs.max) per min."
+    ],
+    "count": 50,
+    "rotation": "per-request",
+    "minGapMs": {
+      "min": 20000,
+      "max": 40000
+    }
+  },
+  "cycle": {
+    "$comment": "Requested window per cycle, seconds. Stretches if the budget cannot fit the products.",
+    "minSec": 55,
+    "maxSec": 70
+  },
+  "ipCap": {
+    "$comment": [
+      "mode 'adaptive': dayPerMin is only the STARTING rate. The controller adds",
+      "one request/min per clean interval and multiplies by decreaseFactor on any",
+      "hard block, settling where this connection actually tolerates. The global",
+      "pause is reserved for being blocked while already at minPerMin.",
+      "mode 'fixed': dayPerMin/nightPerMin are hard limits, never exceeded.",
+      "tolerateBlockRatio: share of recent requests that may be blocked before the rate is cut. A lone block among hundreds is noise, not congestion."
+    ],
+    "mode": "adaptive",
+    "dayPerMin": 30,
+    "nightPerMin": 10,
+    "adaptive": {
+      "startPerMin": 30,
+      "maxPerMin": 120,
+      "minPerMin": 4,
+      "increaseEverySec": 120,
+      "decreaseFactor": 0.6,
+      "tolerateBlockRatio": 0.02
+    }
+  },
+  "night": {
+    "$comment": "IST hours during which the night ratio applies and the pool thins out.",
+    "startIST": "00:00",
+    "endIST": "07:00"
+  },
+  "$comment_noiseRatio": "Fraction of fetches that browse a homepage/search page INSTEAD of a product, varied +/-50% at runtime. Real sessions are mostly NOT product pages; a feed that is ~98% product detail pages has a composition no household produces.",
+  "noiseRatio": 0.08,
+  "$comment_maxConcurrent": "Requests in flight at once across the pool. One per identity regardless. Must be high enough that maxConcurrent / avgFetchSeconds >= target rate per second.",
+  "maxConcurrent": 12,
+  "limits": {
+    "$comment": "refuseWhenStretched: stop at boot when the catalogue stretches the cycle past 3x. Off here — a long cycle is expected at this scale.",
+    "refuseWhenStretched": false
+  },
+  "funnelRatio": 0.12,
+  "$comment_funnelRatio": "Fraction of product fetches that arrive via a search results page (the most common real path to a PDP). Costs one EXTRA request each — volume is what gets metered, so this buys traffic shape at a price."
+}
