@@ -295,9 +295,28 @@ $CMP logs -f api worker    # live output
 git pull && $CMP up -d --build    # deploy an update; migrations apply on start
 ```
 
-**Backups.** `deploy/scripts/backup.sh` dumps the database; run it from cron on
-the instance and copy the dump to S3. An EBS snapshot schedule is the lazier
-equivalent and also fine.
+**Backups.** A nightly dump at 02:15 is installed by the bootstrap script
+(`/etc/cron.d/pricepulse-backup`), keeping 30 daily and 12 monthly copies under
+`deploy/backups/`. Check it ran:
+
+```bash
+tail -20 /var/log/pricepulse-backup.log
+ls -lh ~/pricepulse/deploy/backups/daily | tail -3
+```
+
+**Those dumps are on the same EBS volume as the database.** They survive a bad
+migration or a dropped table; they do not survive the instance dying. For that,
+add an **EBS snapshot schedule** (EC2 → Lifecycle Manager → daily, 7-day
+retention) — it is a five-minute setup and covers the case local dumps cannot.
+
+**Resource limits.** Containers are capped for a `t3.medium`: db 768M, api 640M,
+worker 1792M, caddy 128M, leaving ~700 MB for the OS. If you resize the
+instance, revisit `mem_limit` in the compose file — an unbounded worker
+evicting the database is the failure mode these prevent.
+
+**Log rotation.** Docker's default json-file driver is unbounded, which fills
+the disk on a 24/7 deployment and then fails every check and every write at
+once. All services are capped at 10 MB × 3 files.
 
 **Updating.** `git pull` on the instance, then the rebuild command above.
 Migrations apply automatically via the `migrate` service on every start.

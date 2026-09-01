@@ -18,6 +18,16 @@
 
 name: pricepulse
 
+# Docker's default json-file log driver has no size limit. A worker that logs
+# every cycle, running 24/7, will eventually fill the disk — and a full disk
+# fails every check and every database write at once. This bounds it at 30 MB
+# per service, which is still days of history.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: '10m'
+    max-file: '3'
+
 x-app: &app
   build:
     context: ..
@@ -25,11 +35,17 @@ x-app: &app
   image: pricepulse-app:local
   env_file: .env.aws
   restart: unless-stopped
+  logging: *logging
 
 services:
   db:
     image: postgres:16-alpine
     restart: unless-stopped
+    logging: *logging
+    # Sized for a t3.medium (4 GB): db 768M + api 640M + worker 1792M +
+    # caddy 128M leaves ~700 MB for the OS. Unbounded containers mean one
+    # runaway process evicts the database, which is the worst possible outcome.
+    mem_limit: 768m
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -59,8 +75,17 @@ services:
   api:
     <<: *app
     command: node apps/api/dist/main.js
+    mem_limit: 640m
     expose:
       - '3000'
+    healthcheck:
+      # Restarts the API if it stops serving, rather than leaving a dead
+      # dashboard behind a healthy-looking Caddy.
+      test: ['CMD', 'curl', '-fsS', '-o', '/dev/null', 'http://127.0.0.1:3000/api/health']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
     depends_on:
       db:
         condition: service_healthy
@@ -70,6 +95,9 @@ services:
   worker:
     <<: *app
     command: node apps/worker/dist/main.js
+    # The largest allocation: 48 identities, up to 10 concurrent fetches, and a
+    # Chromium browser tier that can hold a couple of persistent profiles open.
+    mem_limit: 1792m
     volumes:
       # The identity pool: personas, cookie jars, IP-level backoff state, and
       # the captured response bodies behind every failure. Must be a volume —
@@ -90,6 +118,8 @@ services:
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
+    logging: *logging
+    mem_limit: 128m
     ports:
       - '80:80'
       - '443:443'
