@@ -56,7 +56,13 @@ export function DashboardPage(): JSX.Element {
           value={status.products.total}
           icon={Package}
           tone="brand"
-          sub={`${status.products.active} active · ${status.products.pausedUser + status.products.pausedAuto} paused`}
+          sub={
+            `${status.products.active} active · ` +
+            `${status.products.pausedUser + status.products.pausedAuto} paused` +
+            (status.products.max
+              ? ` · ${status.products.total}/${status.products.max} of limit`
+              : '')
+          }
         />
         <StatCard label="Alerts (24h)" value={status.alertsLast24h} icon={Bell} tone="info" />
         <StatCard

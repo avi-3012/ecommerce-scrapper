@@ -48,6 +48,21 @@ export interface RegistrationDeps {
   maxProducts?: number;
 }
 
+/** Thrown when a write would exceed the configured product cap. */
+export class ProductLimitError extends Error {
+  constructor(
+    readonly maxProducts: number,
+    readonly current: number,
+  ) {
+    super(
+      `Product limit reached: tracking ${current} of a maximum ${maxProducts}. ` +
+        `Requests per minute is products ÷ interval, so this cap is what keeps the catalogue ` +
+        `inside what the connection can serve. Raise limits.maxProducts in the scraping config.`,
+    );
+    this.name = 'ProductLimitError';
+  }
+}
+
 export interface RegisterParams {
   url: string;
   canonicalUrl: string;
@@ -179,6 +194,18 @@ export async function registerProduct(
   params: RegisterParams,
 ): Promise<Product> {
   const { prisma } = deps;
+
+  // Enforced here as well as at preview. Preview is where a person meets the
+  // cap, but this is the function that actually writes a row — and it is
+  // reachable directly by anyone posting to the endpoint, so the guard belongs
+  // where the write happens rather than only where the UI happens to look.
+  if (deps.maxProducts && deps.maxProducts > 0) {
+    const current = await prisma.product.count({ where: { status: { not: 'paused_user' } } });
+    if (current >= deps.maxProducts) {
+      throw new ProductLimitError(deps.maxProducts, current);
+    }
+  }
+
   const { user, settings } = await getUserWithSettings(prisma);
 
   const product = await prisma.product.create({

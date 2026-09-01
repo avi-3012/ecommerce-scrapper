@@ -67,7 +67,8 @@
   "maxConcurrent": 12,
   "limits": {
     "$comment": "refuseWhenStretched: stop at boot when the catalogue stretches the cycle past 3x. Off here — a long cycle is expected at this scale.",
-    "refuseWhenStretched": false
+    "refuseWhenStretched": false,
+    "maxProducts": 50
   },
   "funnelRatio": 0.12,
   "$comment_funnelRatio": "Fraction of product fetches that arrive via a search results page (the most common real path to a PDP). Costs one EXTRA request each — volume is what gets metered, so this buys traffic shape at a price."

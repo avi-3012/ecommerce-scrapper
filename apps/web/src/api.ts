@@ -152,6 +152,8 @@ export interface SystemStatusReport {
     pausedUser: number;
     pausedAuto: number;
     failing: number;
+    /** Hard cap on tracked products, or null when uncapped. */
+    max: number | null;
   };
   alertsLast24h: number;
   dropsLast24h: number;

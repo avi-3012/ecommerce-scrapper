@@ -1,5 +1,6 @@
 import { Controller, Get, Inject } from '@nestjs/common';
 import { PrismaService } from './prisma.service.js';
+import { loadScrapingConfigSafely } from './scraping-config.js';
 
 /** System health snapshot (NFR-2, FR-5.1): what the dashboard banner and bot /status read. */
 @Controller('status')
@@ -31,7 +32,16 @@ export class StatusController {
     const workerStale = heartbeatAt === null || Date.now() - heartbeatAt.getTime() > 120_000;
 
     return {
-      products: { total, active, pausedUser, pausedAuto, failing },
+      products: {
+        total,
+        active,
+        pausedUser,
+        pausedAuto,
+        failing,
+        // The hard cap, so the dashboard can show how much room is left rather
+        // than letting someone discover it by being refused.
+        max: loadScrapingConfigSafely().limits.maxProducts || null,
+      },
       alertsLast24h: alerts24h,
       dropsLast24h: drops24h,
       lastCycle: status

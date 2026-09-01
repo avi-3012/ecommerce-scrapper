@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { previewUrl } from './registration.js';
+import { ProductLimitError, previewUrl, registerProduct } from './registration.js';
 import type { RegistrationDeps } from './registration.js';
 
 /**
@@ -66,5 +66,28 @@ describe('product hard cap', () => {
   it('is disabled by 0 or absent', async () => {
     await wentPastTheCap(deps(10_000, 0));
     await wentPastTheCap(deps(10_000, undefined));
+  });
+
+  it('guards the WRITE, not just the preview', async () => {
+    // registerProduct is reachable by posting straight to the endpoint, so the
+    // cap has to hold where the row is actually created — not only where the
+    // dashboard happens to look.
+    const d = deps(50, 50);
+    await expect(
+      registerProduct(d, {
+        url: 'https://www.amazon.in/dp/B0TEST00001',
+        canonicalUrl: 'https://www.amazon.in/dp/B0TEST00001',
+        marketplace: 'amazon_in',
+        marketplaceProductId: 'B0TEST00001',
+        snapshot: {} as never,
+      }),
+    ).rejects.toBeInstanceOf(ProductLimitError);
+  });
+
+  it('carries the numbers on the error, so the API can explain itself', async () => {
+    const err = new ProductLimitError(50, 50);
+    expect(err.maxProducts).toBe(50);
+    expect(err.current).toBe(50);
+    expect(err.message).toMatch(/products ÷ interval/);
   });
 });

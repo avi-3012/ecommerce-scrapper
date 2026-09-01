@@ -2,6 +2,7 @@ import { BadRequestException, Inject, Injectable } from '@nestjs/common';
 import { parse as parseCsv } from 'csv-parse/sync';
 import ExcelJS from 'exceljs';
 import { createDefaultRegistry, resolveListingUrl } from '@pricepulse/adapters';
+import { loadScrapingConfigSafely } from '../scraping-config.js';
 import type { UrlRecognition } from '@pricepulse/adapters';
 import { getUserWithSettings } from '@pricepulse/core';
 import type { Marketplace } from '@pricepulse/shared';
@@ -123,6 +124,11 @@ export class ImportService {
       invalid: [],
     };
     const seenCanonical = new Set<string>();
+    const maxProducts = loadScrapingConfigSafely().limits.maxProducts;
+    const alreadyTracked =
+      maxProducts > 0
+        ? await this.prisma.product.count({ where: { status: { not: 'paused_user' } } })
+        : 0;
 
     // Resolve short/affiliate links (fkrt.co, amzn.in, amzn.to, pwap.in, …) to
     // real marketplace URLs before recognizing them (network step, parallel).
@@ -200,6 +206,20 @@ export class ImportService {
         });
         continue;
       }
+      // The hard cap, counted against what is already tracked PLUS what this
+      // file has already contributed. Surfaced at review time so the rejection
+      // is visible before anyone confirms, not a surprise afterwards.
+      if (maxProducts > 0 && alreadyTracked + review.valid.length >= maxProducts) {
+        review.invalid.push({
+          rowNumber: row.rowNumber,
+          url: row.url,
+          reason:
+            `Product limit reached (${maxProducts}). Requests per minute is products ÷ interval, ` +
+            `so this cap is what keeps the catalogue inside what the connection can serve. ` +
+            `Raise limits.maxProducts in the scraping config, or remove products first.`,
+        });
+        continue;
+      }
       seenCanonical.add(recognition.canonicalUrl);
       // Store the resolved full URL so the product's "open listing" link is direct.
       review.valid.push({
@@ -224,7 +244,24 @@ export class ImportService {
     let imported = 0;
     const now = Date.now();
 
+    // Re-checked here, not just at review: a review can be confirmed minutes
+    // after it was built, by which time the catalogue may have grown through
+    // the dashboard or the bot. The cap has to hold at the moment of writing.
+    const maxProducts = loadScrapingConfigSafely().limits.maxProducts;
+    let tracked =
+      maxProducts > 0
+        ? await this.prisma.product.count({ where: { status: { not: 'paused_user' } } })
+        : 0;
+
     for (const [i, row] of review.valid.entries()) {
+      if (maxProducts > 0 && tracked >= maxProducts) {
+        review.invalid.push({
+          rowNumber: row.rowNumber,
+          url: row.url,
+          reason: `Product limit reached (${maxProducts}) before this row could be imported.`,
+        });
+        continue;
+      }
       try {
         await this.prisma.product.create({
           data: {
@@ -244,6 +281,7 @@ export class ImportService {
           },
         });
         imported++;
+        tracked++;
       } catch {
         review.duplicates.push({
           rowNumber: row.rowNumber,

@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Body,
+  ConflictException,
   Controller,
   Delete,
   Get,
@@ -15,6 +16,7 @@ import {
 import { z } from 'zod';
 import { createDefaultRegistry } from '@pricepulse/adapters';
 import {
+  ProductLimitError,
   deleteProduct,
   deletionImpact,
   pauseProduct,
@@ -165,8 +167,25 @@ export class ProductsController {
   @Post()
   async register(@Body() body: unknown) {
     const params = parseBody(registerSchema, body);
+    try {
+      return await this.doRegister(params);
+    } catch (err) {
+      // A deliberate limit is not a server fault: 409 with the reason, so the
+      // dashboard can say what happened instead of showing "something broke".
+      if (err instanceof ProductLimitError) {
+        throw new ConflictException({ message: err.message, maxProducts: err.maxProducts });
+      }
+      throw err;
+    }
+  }
+
+  private async doRegister(params: z.infer<typeof registerSchema>) {
     return registerProduct(
-      { prisma: this.prisma, registry: this.registry },
+      {
+        prisma: this.prisma,
+        registry: this.registry,
+        maxProducts: loadScrapingConfigSafely().limits.maxProducts,
+      },
       {
         ...params,
         snapshot: {
