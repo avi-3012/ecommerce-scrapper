@@ -172,6 +172,10 @@ export interface SystemStatusReport {
 
 /** The scraper's vitals, written by the worker each cycle. */
 export interface ScraperHealth {
+  /** When the worker published these numbers. Absent on pre-upgrade rows. */
+  at?: string;
+  /** Whether the PAUSE kill switch is engaged. */
+  killSwitch?: boolean;
   identities: number;
   cooling: number;
   suspectsPending: number;

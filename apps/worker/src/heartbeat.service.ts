@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type { OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from './prisma.service.js';
+import { IdentityService } from './identity.service.js';
 import { WORKER_CONFIG } from './config.js';
 import type { WorkerConfig } from './config.js';
 
@@ -16,6 +17,7 @@ export class HeartbeatService implements OnModuleInit, OnModuleDestroy {
 
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Inject(IdentityService) private readonly identities: IdentityService,
     @Inject(WORKER_CONFIG) private readonly config: WorkerConfig,
   ) {}
 
@@ -32,9 +34,36 @@ export class HeartbeatService implements OnModuleInit, OnModuleDestroy {
 
   async beat(now: Date = new Date()): Promise<void> {
     try {
+      // Vitals are published HERE, on the heartbeat, not at the end of a cycle.
+      // A cycle is exactly the thing that stalls — when the global backoff trips
+      // mid-cycle, in-flight fetches wait it out and the cycle cannot finish, so
+      // cycle-end publishing meant the dashboard showed numbers from before the
+      // incident and reported "not paused" while fetching was paused for hours.
+      const snapshot = this.identities.governor.snapshot(now.getTime());
+      const pool = this.identities.pool.list();
       await this.prisma.systemStatus.upsert({
         where: { id: 1 },
-        update: { workerHeartbeatAt: now },
+        update: {
+          workerHeartbeatAt: now,
+          scraperHealth: {
+            at: now.toISOString(),
+            identities: pool.length,
+            cooling: pool.filter((i) => i.state === 'cooling').length,
+            ratePerMin: Math.round(snapshot.capPerMin * 10) / 10,
+            learnedPerMin: Math.round(snapshot.learnedPerMin * 10) / 10,
+            mode: snapshot.mode,
+            diurnalFactor: Math.round(snapshot.diurnalFactor * 100) / 100,
+            usedLastMinute: snapshot.usedLastMinute,
+            usedLastHour: snapshot.usedLastHour,
+            blockRatio: Math.round(snapshot.recentBlockRatio * 1000) / 10,
+            congestionRatio: Math.round(snapshot.recentCongestionRatio * 1000) / 10,
+            unreadable: snapshot.unreadable ?? 0,
+            backoffLevel: snapshot.backoffLevel,
+            pausedUntil: snapshot.pausedUntil,
+            isNight: snapshot.isNight,
+            killSwitch: this.identities.governor.killSwitchEngaged(),
+          },
+        },
         create: { id: 1, workerHeartbeatAt: now },
       });
     } catch (err) {

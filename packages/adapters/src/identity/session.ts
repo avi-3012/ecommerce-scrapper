@@ -69,6 +69,21 @@ const TRANSPORT_RETRIES = 2;
  */
 const H2_IDLE_MS = 15_000;
 
+/**
+ * How long a single request may wait for an IP-budget slot before giving up.
+ *
+ * Long enough to ride out ordinary cap pressure, far shorter than a global
+ * backoff pause, which reaches three hours.
+ */
+const MAX_SLOT_WAIT_MS = 90_000;
+
+/**
+ * After a site hard-blocks, how long before another identity may warm up into
+ * it. Warm-ups are the one request every fresh identity makes unprompted, so
+ * without this a single site-wide refusal is multiplied by the pool size.
+ */
+const SITE_WARMUP_COOLDOWN_MS = 10 * 60_000;
+
 export interface SessionRequestOptions {
   method?: 'GET' | 'POST';
   /** Merged OVER the identity's stored headers, preserving their order. */
@@ -191,6 +206,8 @@ export class IdentitySession {
 
   /** identityId → agent, so a session rebuilt mid-cycle keeps its connections. */
   private static readonly agents = new Map<string, Http2Agent>();
+  /** site → when it last hard-blocked, shared across every identity. */
+  private static readonly siteBlockedAt = new Map<string, number>();
 
   /** Drop an identity's connections entirely (retirement, shutdown). */
   static destroyAgent(identityId: string): void {
@@ -259,10 +276,23 @@ export class IdentitySession {
    * file takes effect well inside the five seconds the rails require.
    */
   private async awaitSlot(): Promise<void> {
+    const deadline = Date.now() + MAX_SLOT_WAIT_MS;
     for (;;) {
       if (this.signal?.aborted) throw new CheckError('other', 'Shutting down');
       const decision = this.governor.canRequest();
       if (decision.allowed) return;
+      // Waiting out a MULTI-HOUR global pause inside a request is not patience,
+      // it is a stall: the scheduler awaits its in-flight fetches before a cycle
+      // can end, so one paused fetch freezes the whole loop — no new cycles, no
+      // status updates, a dashboard frozen at pre-incident numbers. Give up and
+      // let the scheduler re-plan; the pause is still in force and the next
+      // cycle will find it.
+      if (Date.now() > deadline) {
+        throw new CheckError(
+          'other',
+          `Fetching is paused (${decision.reason}); giving up this check rather than blocking the cycle`,
+        );
+      }
       await sleep(Math.min(decision.retryAfterMs, 1_000));
     }
   }
@@ -408,6 +438,18 @@ export class IdentitySession {
   async warmUp(site: string, debug?: ScrapeDebug): Promise<void> {
     const homepage = SITE_HOMEPAGE[site];
     if (!homepage) return;
+    // One site-wide refusal should not authorise every other identity to go and
+    // collect its own. 48 fresh identities each warming up into a marketplace
+    // that just returned 529 produced 48 hard blocks in the same second and
+    // drove the global backoff to its three-hour cap.
+    const blockedAt = IdentitySession.siteBlockedAt.get(site);
+    if (blockedAt && Date.now() - blockedAt < SITE_WARMUP_COOLDOWN_MS) {
+      throw new CheckError(
+        'fetch_blocked',
+        `${site} returned a hard block ${Math.round((Date.now() - blockedAt) / 1000)}s ago; ` +
+          `not warming up more identities into it yet`,
+      );
+    }
     const response = await this.request(homepage, { kind: 'warmup', debug, navigation: true });
     const verdict = classifyResponse({
       marketplace: this.marketplace,
@@ -601,6 +643,7 @@ export class IdentitySession {
       body: response.body,
       headers: response.headers as Record<string, unknown>,
     });
+    IdentitySession.siteBlockedAt.set(siteKeyOf(response.url), Date.now());
     console.warn(
       `[identity] hard_block ${reason} on ${this.marketplace} via ${this.identity.id} ` +
         `(status ${response.statusCode}, sha256 ${hash.slice(0, 12)}): ${detail}`,

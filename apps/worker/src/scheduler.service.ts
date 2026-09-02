@@ -1,7 +1,13 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type { OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { getUserWithSettings, minutesOfDayIn, pruneScrapeAudits } from '@pricepulse/core';
-import { planCycle, pruneCaptures, searchKeywords, stretchWarning } from '@pricepulse/adapters';
+import {
+  MAX_REFILL_PER_PASS,
+  planCycle,
+  pruneCaptures,
+  searchKeywords,
+  stretchWarning,
+} from '@pricepulse/adapters';
 import type { Product, Settings } from '@pricepulse/db';
 import { PrismaService } from './prisma.service.js';
 import { CheckRunnerService } from './check-runner.service.js';
@@ -85,6 +91,12 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
 
   private async runCycle(): Promise<void> {
     const cycleStart = new Date();
+    // Replace identities lost to retirement. Without this the pool only ever
+    // shrinks — blocks retire personas, nothing creates them, and a pool of 48
+    // erodes to 31 in a day and keeps going until acquire() starts returning
+    // null and checks are simply skipped. Topped up a couple per cycle so the
+    // recovery is gradual rather than a visible step change.
+    this.identities.pool.ensureSize(Date.now(), MAX_REFILL_PER_PASS);
     const config = this.identities.config;
     const capPerMin = this.identities.governor.capPerMin();
     const due = await this.dueProducts(config.cycle.maxSec * 1_000);
@@ -185,6 +197,10 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async fetchNoise(product: Product): Promise<void> {
+    // Noise browses the SAME marketplace as the product it stands in for.
+    // Picking freely meant the pool kept touching a marketplace whose products
+    // were all paused — pausing every Flipkart product did not stop 48
+    // identities warming up against Flipkart and collecting a 529 each.
     const session = this.identities.acquire(product.marketplace);
     if (!session) return;
     try {
@@ -297,8 +313,9 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       this.prisma.priceHistory.count({ where: { checkedAt: { gte: since }, success: true } }),
     ]);
     const successRate7d = total7d > 0 ? Math.round((success7d / total7d) * 10000) / 100 : null;
-    const snapshot = this.identities.governor.snapshot();
 
+    // Cycle counters only. The scraper's vitals are published by the heartbeat,
+    // which keeps running when a cycle does not.
     await this.prisma.systemStatus.upsert({
       where: { id: 1 },
       update: {
@@ -309,25 +326,6 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         lastCycleSucceeded: succeeded,
         lastCycleFailed: failed,
         successRate7d,
-        // The scraper-health blob is where the dashboard reads the identity
-        // layer's vitals without needing a second endpoint.
-        scraperHealth: {
-          identities: this.identities.pool.list().length,
-          cooling: this.identities.pool.list().filter((i) => i.state === 'cooling').length,
-          suspectsPending: this.runner.suspects.size,
-          ratePerMin: Math.round(snapshot.capPerMin * 10) / 10,
-          learnedPerMin: Math.round(snapshot.learnedPerMin * 10) / 10,
-          mode: snapshot.mode,
-          diurnalFactor: Math.round(snapshot.diurnalFactor * 100) / 100,
-          usedLastHour: snapshot.usedLastHour,
-          usedLastMinute: snapshot.usedLastMinute,
-          blockRatio: Math.round(snapshot.recentBlockRatio * 1000) / 10,
-          congestionRatio: Math.round(snapshot.recentCongestionRatio * 1000) / 10,
-          unreadable: snapshot.unreadable ?? 0,
-          backoffLevel: snapshot.backoffLevel,
-          pausedUntil: snapshot.pausedUntil,
-          isNight: snapshot.isNight,
-        },
       },
       create: { id: 1 },
     });

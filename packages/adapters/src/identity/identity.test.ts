@@ -215,6 +215,47 @@ describe('cookie jar', () => {
   });
 });
 
+describe('pool replenishment', () => {
+  it('replaces identities lost to retirement', () => {
+    // Observed live: a pool of 48 eroded to 31 in a day because ensureSize ran
+    // only at worker startup. Blocks retire personas; nothing was creating them.
+    const pool = new IdentityPool(withPool(10), new IdentityStore(tempDir()));
+    pool.ensureSize();
+    expect(pool.list()).toHaveLength(10);
+
+    let now = Date.UTC(2026, 7, 21, 6, 0, 0);
+    for (const identity of pool.list().slice(0, 4)) {
+      for (let i = 0; i < 3; i++) pool.noteBlock(identity, (now += 60_000));
+    }
+    expect(pool.list().length).toBe(6);
+
+    // Each pass tops up by at most MAX_REFILL_PER_PASS, so recovery is gradual.
+    pool.ensureSize(now, 2);
+    expect(pool.list()).toHaveLength(8);
+    pool.ensureSize(now, 2);
+    expect(pool.list()).toHaveLength(10);
+    // And stops at the configured size rather than growing without bound.
+    pool.ensureSize(now, 2);
+    expect(pool.list()).toHaveLength(10);
+  });
+
+  it('replacements are consistent personas like any other', () => {
+    const pool = new IdentityPool(withPool(4), new IdentityStore(tempDir()));
+    pool.ensureSize();
+    const before = new Set(pool.list().map((i) => i.id));
+    let now = Date.UTC(2026, 7, 21, 6, 0, 0);
+    for (let i = 0; i < 3; i++) pool.noteBlock(pool.list()[0]!, (now += 60_000));
+    pool.ensureSize(now, 2);
+
+    const fresh = pool.list().filter((i) => !before.has(i.id));
+    expect(fresh.length).toBeGreaterThan(0);
+    for (const identity of fresh) {
+      expect(() => assertIdentityConsistent(identity)).not.toThrow();
+      expect(identity.device).toBe('desktop');
+    }
+  });
+});
+
 describe('pool selection', () => {
   it('holds an identity back until its own minimum gap has elapsed', () => {
     const pool = new IdentityPool(withPool(1), new IdentityStore(tempDir()));

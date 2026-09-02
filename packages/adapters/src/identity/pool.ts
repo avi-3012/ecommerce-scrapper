@@ -39,6 +39,17 @@ export const AWAY_RANGE_MS = { min: 20 * 60_000, max: 90 * 60_000 } as const;
 export const AWAY_PER_DAY = { min: 2, max: 4 } as const;
 /** Background churn: roughly one identity replaced per week. */
 export const CHURN_INTERVAL_MS = 7 * 24 * 3600_000;
+/**
+ * How many identities may be created in one top-up.
+ *
+ * The pool loses members to retirement and has to replace them, but replacing
+ * seventeen at once would put seventeen brand-new personas into service in the
+ * same minute — each needing its own warm-up, all with empty jars and no
+ * history. A household does not acquire seventeen devices at once. Refill a
+ * couple per cycle and the pool recovers within the hour without a visible step
+ * change in what the connection looks like.
+ */
+export const MAX_REFILL_PER_PASS = 2;
 /** Hard blocks within 24 h that retire an identity early. */
 export const RETIRE_AFTER_BLOCKS = 3;
 /** Chance that a product stays with the identity that fetched it last cycle. */
@@ -143,7 +154,7 @@ export class IdentityPool {
   }
 
   /** Top the pool up to the configured size and apply background churn. */
-  ensureSize(now: number = Date.now()): void {
+  ensureSize(now: number = Date.now(), maxNew = Number.POSITIVE_INFINITY): void {
     this.reload();
     this.identities = this.identities.filter((i) => i.state !== 'retired');
     // Retire personas whose device class is no longer supported. Trimming by
@@ -156,7 +167,8 @@ export class IdentityPool {
       }
     }
     this.applyChurn(now);
-    while (this.identities.length < this.config.identities.count) {
+    let created = 0;
+    while (this.identities.length < this.config.identities.count && created < maxNew) {
       this.identities.push(
         createIdentity(
           pick(IDENTITY_SPECS, this.random),
@@ -164,6 +176,13 @@ export class IdentityPool {
           this.random,
           this.config.identities.minGapMs,
         ),
+      );
+      created++;
+    }
+    if (created > 0 && this.identities.length < this.config.identities.count) {
+      console.log(
+        `[identity] pool topped up by ${created} (${this.identities.length}/${this.config.identities.count}); ` +
+          `refilling gradually`,
       );
     }
     // Shrinking the configured count retires the youngest first: the oldest

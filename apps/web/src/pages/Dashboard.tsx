@@ -240,8 +240,17 @@ export function alertSummary(a: AlertRow): string {
 function ScraperPanel({ health }: { health: ScraperHealth }): JSX.Element {
   const pausedUntil = health.pausedUntil;
   const paused = pausedUntil !== null && pausedUntil > Date.now();
+  // Vitals are published on the worker's 30 s heartbeat. Much older than that
+  // means the worker is wedged or gone — and rendering old numbers as if they
+  // were live is worse than rendering nothing, because it reads as healthy.
+  const ageMs = health.at ? Date.now() - new Date(health.at).getTime() : null;
+  const stale = ageMs === null || ageMs > 150_000;
   const tone =
-    paused || health.blockRatio > 2 ? 'danger' : health.congestionRatio > 15 ? 'warning' : 'ok';
+    stale || paused || health.blockRatio > 2
+      ? 'danger'
+      : health.congestionRatio > 15
+        ? 'warning'
+        : 'ok';
   const toneClass =
     tone === 'danger'
       ? 'border-danger bg-danger-subtle'
@@ -293,10 +302,22 @@ function ScraperPanel({ health }: { health: ScraperHealth }): JSX.Element {
             danger={health.unreadable > 20}
           />
         </div>
-        {paused ? (
+        {stale ? (
           <p className="mt-3 text-sm font-medium text-danger-fg">
-            Fetching is paused until {new Date(pausedUntil!).toLocaleTimeString()} — the connection
-            is backing off after repeated blocks (level {health.backoffLevel}).
+            These numbers are{' '}
+            {ageMs === null ? 'of unknown age' : `${Math.round(ageMs / 60_000)} minutes old`} — the
+            worker has stopped publishing them. Everything above is what it last reported, not what
+            is happening now. Check the worker is running, then download the logs.
+          </p>
+        ) : health.killSwitch ? (
+          <p className="mt-3 text-sm font-medium text-danger-fg">
+            Fetching is stopped by the PAUSE kill switch. Remove the PAUSE file (or unset PAUSE=1)
+            to resume.
+          </p>
+        ) : paused ? (
+          <p className="mt-3 text-sm font-medium text-danger-fg">
+            Fetching is paused until {new Date(pausedUntil!).toLocaleTimeString()} — backing off
+            after repeated blocks (level {health.backoffLevel}). It resumes on its own.
           </p>
         ) : (
           <p className="mt-3 text-xs text-fg-muted">
