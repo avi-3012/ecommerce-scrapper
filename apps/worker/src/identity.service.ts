@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import type { OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import {
   DEFAULT_SCRAPING_CONFIG,
+  MAX_REFILL_PER_PASS,
   IdentityPool,
   IdentitySession,
   IdentityStore,
@@ -40,7 +41,28 @@ export class IdentityService implements OnModuleInit, OnModuleDestroy {
   constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
 
   async onModuleInit(): Promise<void> {
-    this.pool.ensureSize();
+    // Establishing a pool and recovering one are different situations.
+    //
+    // From nothing — a first deploy — create the whole pool at once: there is
+    // no traffic to blend into yet and a pool of two is useless.
+    //
+    // From a pool that has ERODED, top up gradually like any other cycle. Every
+    // new identity must warm up before its first product fetch, so replacing
+    // seventeen at once means seventeen extra requests moments after startup —
+    // the exact burst shape that earns a block, arriving right when the
+    // connection is least likely to be in credit.
+    const existing = this.pool.list().length;
+    this.pool.ensureSize(
+      Date.now(),
+      existing === 0 ? Number.POSITIVE_INFINITY : MAX_REFILL_PER_PASS,
+    );
+    const after = this.pool.list().length;
+    if (existing > 0 && after < this.config.identities.count) {
+      console.log(
+        `[identity] pool recovering: ${after}/${this.config.identities.count}, ` +
+          `topping up ${MAX_REFILL_PER_PASS} per cycle`,
+      );
+    }
     // The governor counts browser page loads too — they are the heaviest
     // request we make and were previously free as far as the budget knew.
     this.browserTier = await createBrowserTier(undefined, this.governor);
