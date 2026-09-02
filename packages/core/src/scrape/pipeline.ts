@@ -76,7 +76,9 @@ export interface PipelineOptions {
  * cool the identity and feed the global backoff instead.
  *
  * `parse_failed` remains: that is a client-rendered page we could not read, and
- * a real browser genuinely can read it.
+ * a real browser genuinely can read it. Individual failures opt out via
+ * `CheckError.escalate` when the browser would provably be handed the same
+ * unreadable page — a variant redirect, for instance.
  */
 const ESCALATABLE: ReadonlySet<string> = new Set(['parse_failed']);
 
@@ -102,7 +104,7 @@ export async function performCheck(
     return finish(tier1.value, 'http', started, debug, options);
   }
 
-  if (options.browserFetch && ESCALATABLE.has(tier1.error.reason)) {
+  if (options.browserFetch && ESCALATABLE.has(tier1.error.reason) && tier1.error.escalate) {
     const tier2 = await attempt(async () => {
       // Route the browser fetch THROUGH the adapter, not around it: the adapter
       // fetches the main page with the browser (reading the client-rendered
@@ -185,9 +187,14 @@ function failure(
   // Keep the bytes for EVERY failed check, not just blocks. A parse failure is
   // the case where the response is most needed and least reproducible: asking
   // the marketplace again to see what it sent is both slow and, on a flagged
-  // IP, actively harmful. A block was already captured at fetch time.
+  // IP, actively harmful.
+  //
+  // A block was already written to disk at fetch time, so it is not captured
+  // again here — but the audit row still needs the PATH, or the most common
+  // failure in the system is the one whose body cannot be found from the row
+  // describing it.
   debug.capturePath ??= blocked
-    ? null
+    ? options.session.lastBlockCapturePath
     : options.session.captureLastResponse(error.reason, error.message, options.productId);
   // A page we could not read is counted separately from congestion: it may be
   // our parser, and throttling the connection would fix nothing while hiding it.

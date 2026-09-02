@@ -2,7 +2,13 @@ import { Inject, Injectable } from '@nestjs/common';
 import type { OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { PgBoss } from 'pg-boss';
 import { JOB_QUEUES } from '@pricepulse/core';
-import type { CheckProductJob, PreviewProductJob, PreviewResult } from '@pricepulse/core';
+import type {
+  CheckProductJob,
+  PreviewProductJob,
+  PreviewResult,
+  ResolveLinksJob,
+  ResolveLinksResult,
+} from '@pricepulse/core';
 import { API_CONFIG } from './config.js';
 import type { ApiConfig } from './config.js';
 
@@ -73,6 +79,44 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
       if (job.state === 'failed' || job.state === 'cancelled') return null;
     }
     return null;
+  }
+
+  /**
+   * Ask the worker to follow the share links in an import file.
+   *
+   * Same reasoning as `previewProduct`: a share link is a request to the
+   * marketplace that issued it, and the identity pool lives in the worker. The
+   * timeout is generous because the worker resolves these one at a time under
+   * the identity's own pacing — an import of full product URLs returns at once,
+   * an import of fifty share links genuinely costs fifty paced requests.
+   *
+   * Returns nulls (never the raw URLs) when the worker cannot answer, so the
+   * caller reports the rows as unresolved instead of importing an unfollowed
+   * link as though it were a listing.
+   */
+  async resolveLinks(urls: string[], timeoutMs = 180_000): Promise<Array<string | null>> {
+    const unresolved = urls.map(() => null);
+    const boss = this.boss;
+    if (!boss || urls.length === 0) return unresolved;
+    const payload: ResolveLinksJob = { urls };
+    const jobId = await boss.send(
+      JOB_QUEUES.resolveLinks,
+      { ...payload },
+      { expireInSeconds: Math.ceil(timeoutMs / 1000) + 30 },
+    );
+    if (!jobId) return unresolved;
+
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      await sleep(500);
+      const job = await boss.getJobById(JOB_QUEUES.resolveLinks, jobId).catch(() => null);
+      if (!job) continue;
+      if (job.state === 'completed') {
+        return (job.output as ResolveLinksResult | null)?.resolved ?? unresolved;
+      }
+      if (job.state === 'failed' || job.state === 'cancelled') return unresolved;
+    }
+    return unresolved;
   }
 }
 

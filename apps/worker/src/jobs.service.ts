@@ -1,8 +1,14 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type { OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { PgBoss } from 'pg-boss';
-import { JOB_QUEUES, previewUrl } from '@pricepulse/core';
-import type { CheckProductJob, PreviewProductJob, PreviewResult } from '@pricepulse/core';
+import { JOB_QUEUES, previewUrl, resolveShortLink } from '@pricepulse/core';
+import type {
+  CheckProductJob,
+  PreviewProductJob,
+  PreviewResult,
+  ResolveLinksJob,
+  ResolveLinksResult,
+} from '@pricepulse/core';
 import type { Marketplace } from '@pricepulse/shared';
 import type { FetchFn, IdentitySession } from '@pricepulse/adapters';
 import { IdentityService } from './identity.service.js';
@@ -63,21 +69,55 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
       return this.preview(job.data.url);
     });
 
+    // Bulk-import short links. Resolved here, one at a time, as real identities
+    // — the API has no pool to spend and no view of the IP budget.
+    await boss.work<ResolveLinksJob, ResolveLinksResult>(JOB_QUEUES.resolveLinks, async (jobs) => {
+      const job = jobs[0];
+      if (!job) throw new Error('resolve job with no payload');
+      return { resolved: await this.resolveLinks(job.data.urls) };
+    });
+
     this.boss = boss;
+  }
+
+  /**
+   * Resolve share links SEQUENTIALLY. The concurrency here is not a tuning
+   * knob: each hop is paced by its identity and takes a slot against the IP
+   * cap, and running them in parallel is exactly the burst this path used to
+   * send. A file of full product URLs resolves instantly, because none of them
+   * needs a hop at all.
+   */
+  private async resolveLinks(urls: string[]): Promise<Array<string | null>> {
+    const deps = this.registrationDeps();
+    const out: Array<string | null> = [];
+    for (const url of urls) {
+      if (!url) {
+        out.push(null);
+        continue;
+      }
+      if (this.runner.registry.recognize(url).kind === 'listing') {
+        out.push(url); // already a listing — no request needed
+        continue;
+      }
+      out.push(await resolveShortLink(deps, url));
+    }
+    return out;
   }
 
   /** One preview, run as a normal identity-paced fetch. */
   private async preview(url: string): Promise<PreviewResult> {
-    return previewUrl(
-      {
-        prisma: this.prisma,
-        registry: this.runner.registry,
-        maxProducts: this.identities.config.limits.maxProducts,
-        acquireIdentity: (marketplace: Marketplace) => this.acquireIdentity(marketplace),
-        releaseIdentity: (session: IdentitySession) => this.identities.release(session),
-      },
-      url,
-    );
+    return previewUrl(this.registrationDeps(), url);
+  }
+
+  /** The identity-backed dependencies both registration paths run on. */
+  private registrationDeps(): Parameters<typeof previewUrl>[0] {
+    return {
+      prisma: this.prisma,
+      registry: this.runner.registry,
+      maxProducts: this.identities.config.limits.maxProducts,
+      acquireIdentity: (marketplace: Marketplace) => this.acquireIdentity(marketplace),
+      releaseIdentity: (session: IdentitySession) => this.identities.release(session),
+    };
   }
 
   private acquireIdentity(

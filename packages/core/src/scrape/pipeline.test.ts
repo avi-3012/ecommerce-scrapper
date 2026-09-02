@@ -97,6 +97,26 @@ describe('performCheck tier-2 escalation', () => {
     expect(outcome.tier).toBe('http');
   });
 
+  it('does not escalate a parse failure the browser would reproduce exactly', async () => {
+    // A variant redirect: Amazon hands a browser the same wrong ASIN it handed
+    // the HTTP tier. Escalating would spend a browser launch and an IP slot to
+    // arrive at the identical failure.
+    const { adapter, fetch } = stubAdapter(
+      new CheckError('parse_failed', 'Page is for ASIN B0Y, expected B0X', { escalate: false }),
+      async () => {
+        throw new Error('the browser tier must not be reached for a variant redirect');
+      },
+    );
+
+    const outcome = await performCheck(adapter, 'https://www.flipkart.com/x/p/itm1?pid=P1', {
+      session: session(),
+      browserFetch,
+    });
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(outcome.ok).toBe(false);
+  });
+
   it('classifies a CAPTCHA as blocked, not as something to retry', async () => {
     const { adapter, fetch } = stubAdapter(
       new CheckError('captcha', 'Amazon presented a CAPTCHA challenge'),

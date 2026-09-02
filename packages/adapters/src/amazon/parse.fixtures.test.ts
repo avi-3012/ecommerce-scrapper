@@ -212,6 +212,10 @@ describe('amazon fixture suite (WP-1.2)', () => {
       expect(err).toBeInstanceOf(CheckError);
       expect((err as CheckError).reason).toBe('parse_failed');
       expect((err as CheckError).message).toContain('B0CHX2ZLPQ');
+      // Amazon redirects a browser to the same variant it redirected us to, so
+      // escalating would spend the heaviest request in the system reproducing
+      // this identical mismatch.
+      expect((err as CheckError).escalate).toBe(false);
     }
   });
 

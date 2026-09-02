@@ -111,6 +111,26 @@ export async function createBrowserTier(
   const open = new Map<string, PersistentContext>();
   /** Null until the first launch tells us whether real Chrome is installed. */
   let chromeChannelWorks: boolean | null = null;
+  /**
+   * identityId → how many fetches are currently holding that context open.
+   *
+   * Without this, LRU eviction is a race: `contextFor` awaits a browser launch,
+   * and while it is awaiting, another fetch's eviction pass can close the
+   * context whose page is mid-`goto`. The check then fails with a Playwright
+   * "target closed" error that has nothing to do with the listing, and — worse —
+   * looks like marketplace flakiness in the audit trail.
+   */
+  const inUse = new Map<string, number>();
+
+  function acquire(identityId: string): void {
+    inUse.set(identityId, (inUse.get(identityId) ?? 0) + 1);
+  }
+
+  function release(identityId: string): void {
+    const next = (inUse.get(identityId) ?? 1) - 1;
+    if (next <= 0) inUse.delete(identityId);
+    else inUse.set(identityId, next);
+  }
 
   async function close(identityId: string): Promise<void> {
     const context = open.get(identityId);
@@ -127,10 +147,15 @@ export async function createBrowserTier(
       open.set(identity.id, existing);
       return existing;
     }
+    // Evict the least-recently-used context that nobody is fetching through.
+    // If every open context is busy we deliberately overshoot the cap rather
+    // than close one out from under an in-flight page: one extra browser for
+    // the length of one check is a far cheaper problem than a check that fails
+    // for a reason the marketplace had no part in.
     while (open.size >= MAX_OPEN_CONTEXTS) {
-      const oldest = open.keys().next().value;
-      if (oldest === undefined) break;
-      await close(oldest);
+      const idle = [...open.keys()].find((id) => !inUse.has(id));
+      if (idle === undefined) break;
+      await close(idle);
     }
     const userDataDir = join(profilesDir, identity.id);
     mkdirSync(userDataDir, { recursive: true });
@@ -183,63 +208,74 @@ export async function createBrowserTier(
 
   function fetchFor(identity: Identity): FetchFn {
     return async (url, options): Promise<RawPage> => {
-      const context = await contextFor(identity);
-      const page = await context.newPage();
+      // Claimed BEFORE the launch is awaited, so the context cannot be evicted
+      // in the window between asking for it and opening a page on it.
+      acquire(identity.id);
       try {
-        // Apply a caller-supplied cookie (Amazon's glow location cookie) so a
-        // browser-tier fetch is localised exactly like the HTTP tier. Without it,
-        // the browser would load the IP-default location and record a wrong price.
-        const cookieHeader = options?.headers?.cookie;
-        if (cookieHeader) {
-          const cookies = cookieHeader
-            .split(';')
-            .map((pair) => {
-              const eq = pair.indexOf('=');
-              return eq > 0
-                ? { name: pair.slice(0, eq).trim(), value: pair.slice(eq + 1).trim(), url }
-                : null;
-            })
-            .filter((c): c is { name: string; value: string; url: string } => c !== null);
-          if (cookies.length) await context.addCookies(cookies);
-        }
-        // Meter true wire bytes (encoded) via CDP — best-effort observability.
-        let wireBytes = 0;
-        try {
-          const cdp = await context.newCDPSession(page);
-          await cdp.send('Network.enable');
-          cdp.on('Network.loadingFinished', (e) => {
-            wireBytes += e.encodedDataLength ?? 0;
-          });
-        } catch {
-          // CDP unavailable — skip metering, never block the fetch.
-        }
-        counter?.recordRequest();
-        const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
-        if (wireBytes > 0) {
-          recordProxyBytes(options?.debug, options?.kind ?? 'main_page', wireBytes, {
-            tier: 'browser',
-          });
-        }
-        const status = response?.status() ?? 0;
-        if (status === 404 || status === 410) {
-          throw new CheckError('listing_removed', `Listing returned HTTP ${status} (browser)`);
-        }
-        return {
-          url: page.url(),
-          body: await page.content(),
-          tier: 'browser',
-          fetchedAt: new Date(),
-        };
-      } catch (err) {
-        if (err instanceof CheckError) throw err;
-        const message = err instanceof Error ? err.message : String(err);
-        if (/timeout/i.test(message)) {
-          throw new CheckError('fetch_timeout', `Browser navigation timed out: ${message}`);
-        }
-        throw new CheckError('http_error', `Browser fetch failed: ${message}`);
+        return await run();
       } finally {
-        // The PAGE closes; the CONTEXT stays, because the context is the profile.
-        await page.close().catch(() => undefined);
+        release(identity.id);
+      }
+
+      async function run(): Promise<RawPage> {
+        const context = await contextFor(identity);
+        const page = await context.newPage();
+        try {
+          // Apply a caller-supplied cookie (Amazon's glow location cookie) so a
+          // browser-tier fetch is localised exactly like the HTTP tier. Without it,
+          // the browser would load the IP-default location and record a wrong price.
+          const cookieHeader = options?.headers?.cookie;
+          if (cookieHeader) {
+            const cookies = cookieHeader
+              .split(';')
+              .map((pair) => {
+                const eq = pair.indexOf('=');
+                return eq > 0
+                  ? { name: pair.slice(0, eq).trim(), value: pair.slice(eq + 1).trim(), url }
+                  : null;
+              })
+              .filter((c): c is { name: string; value: string; url: string } => c !== null);
+            if (cookies.length) await context.addCookies(cookies);
+          }
+          // Meter true wire bytes (encoded) via CDP — best-effort observability.
+          let wireBytes = 0;
+          try {
+            const cdp = await context.newCDPSession(page);
+            await cdp.send('Network.enable');
+            cdp.on('Network.loadingFinished', (e) => {
+              wireBytes += e.encodedDataLength ?? 0;
+            });
+          } catch {
+            // CDP unavailable — skip metering, never block the fetch.
+          }
+          counter?.recordRequest();
+          const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+          if (wireBytes > 0) {
+            recordProxyBytes(options?.debug, options?.kind ?? 'main_page', wireBytes, {
+              tier: 'browser',
+            });
+          }
+          const status = response?.status() ?? 0;
+          if (status === 404 || status === 410) {
+            throw new CheckError('listing_removed', `Listing returned HTTP ${status} (browser)`);
+          }
+          return {
+            url: page.url(),
+            body: await page.content(),
+            tier: 'browser',
+            fetchedAt: new Date(),
+          };
+        } catch (err) {
+          if (err instanceof CheckError) throw err;
+          const message = err instanceof Error ? err.message : String(err);
+          if (/timeout/i.test(message)) {
+            throw new CheckError('fetch_timeout', `Browser navigation timed out: ${message}`);
+          }
+          throw new CheckError('http_error', `Browser fetch failed: ${message}`);
+        } finally {
+          // The PAGE closes; the CONTEXT stays, because the context is the profile.
+          await page.close().catch(() => undefined);
+        }
       }
     };
   }

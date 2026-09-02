@@ -1,5 +1,6 @@
 import * as cheerio from 'cheerio';
 import { describe, expect, it } from 'vitest';
+import type { ScrapeDebug } from '@pricepulse/shared';
 import type { RawPage } from '../adapter.js';
 import { CheckError } from '../errors.js';
 import type { FetchFn } from '../fetch/http.js';
@@ -124,25 +125,43 @@ describe('collectAmazonOffers', () => {
     expect(offers?.[0]?.description).toContain('cashback');
   });
 
-  it('fails as parse_failed when a multi-offer card yields no individual offers (no toleration)', async () => {
+  // The price is the product's primary fact; the offer breakdown is supporting
+  // detail. A side-sheet that will not expand must not cost the price.
+  it('degrades to the card summary when a multi-offer side-sheet yields no offers', async () => {
     const html = card('InstantBankDiscount', 'Bank Offer', 'Upto ₹8,000 discount', 3);
-    await expect(
-      collectAmazonOffers(
-        html,
-        'B0X',
-        stubFetch({ 'offerType=InstantBankDiscount': '<div></div>' }),
-      ),
-    ).rejects.toMatchObject({ reason: 'parse_failed' });
+    const debug: ScrapeDebug = {};
+    const offers = await collectAmazonOffers(
+      html,
+      'B0X',
+      stubFetch({ 'offerType=InstantBankDiscount': '<div></div>' }),
+      debug,
+    );
+    expect(offers).toEqual([{ label: 'Bank Offer', description: 'Upto ₹8,000 discount' }]);
+    expect(debug.notes?.join(' ')).toContain('Bank Offer');
   });
 
-  it('fails as parse_failed when a multi-offer card exposes no side-sheet config', async () => {
+  it('degrades to the card summary when a multi-offer card exposes no side-sheet config', async () => {
     const html = `<div class="offers-items">
       <h6 class="offers-items-title">Bank Offer</h6>
       <div class="offers-items-content">Upto ₹8,000 discount</div>
       <a class="vsx-offers-count">3 offers</a></div>`;
-    await expect(collectAmazonOffers(html, 'B0X', stubFetch({}))).rejects.toMatchObject({
-      reason: 'parse_failed',
-    });
+    const debug: ScrapeDebug = {};
+    const offers = await collectAmazonOffers(html, 'B0X', stubFetch({}), debug);
+    expect(offers).toEqual([{ label: 'Bank Offer', description: 'Upto ₹8,000 discount' }]);
+    expect(debug.notes?.join(' ')).toContain('no side-sheet config');
+  });
+
+  it('degrades when the side-sheet request itself fails (a 503 must not cost the price)', async () => {
+    const html = card('InstantBankDiscount', 'Bank Offer', 'Upto ₹8,000 discount', 3);
+    const debug: ScrapeDebug = {};
+    const offers = await collectAmazonOffers(
+      html,
+      'B0X',
+      () => Promise.reject(new CheckError('http_error', 'HTTP 503')),
+      debug,
+    );
+    expect(offers).toEqual([{ label: 'Bank Offer', description: 'Upto ₹8,000 discount' }]);
+    expect(debug.notes?.join(' ')).toContain('503');
   });
 });
 

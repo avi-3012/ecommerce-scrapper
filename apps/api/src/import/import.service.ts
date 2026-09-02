@@ -1,15 +1,13 @@
 import { BadRequestException, Inject, Injectable } from '@nestjs/common';
 import { parse as parseCsv } from 'csv-parse/sync';
 import ExcelJS from 'exceljs';
-import { createDefaultRegistry, resolveListingUrl } from '@pricepulse/adapters';
+import { createDefaultRegistry } from '@pricepulse/adapters';
 import { loadScrapingConfigSafely } from '../scraping-config.js';
 import type { UrlRecognition } from '@pricepulse/adapters';
 import { getUserWithSettings } from '@pricepulse/core';
 import type { Marketplace } from '@pricepulse/shared';
 import { PrismaService } from '../prisma.service.js';
-
-/** How many short links to resolve in parallel during a bulk import (WP-2.9). */
-const RESOLVE_CONCURRENCY = 6;
+import { JobsService } from '../jobs.service.js';
 
 /**
  * Extract a plain string from any ExcelJS cell. Excel auto-linkifies URLs, so a
@@ -39,24 +37,6 @@ function cellToString(cell: ExcelJS.Cell): string {
     return String(cell.text ?? '').trim();
   }
   return String(v).trim();
-}
-
-/** Run an async mapper over items with a bounded number of concurrent workers. */
-async function mapWithConcurrency<T, R>(
-  items: T[],
-  limit: number,
-  fn: (item: T) => Promise<R>,
-): Promise<R[]> {
-  const results = new Array<R>(items.length);
-  let next = 0;
-  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (next < items.length) {
-      const i = next++;
-      results[i] = await fn(items[i]!);
-    }
-  });
-  await Promise.all(workers);
-  return results;
 }
 
 export interface ImportRow {
@@ -105,7 +85,10 @@ const STAGGER_SECONDS = 15;
 export class ImportService {
   private readonly registry = createDefaultRegistry();
 
-  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Inject(JobsService) private readonly jobs: JobsService,
+  ) {}
 
   /** Validation pass — persists nothing (WP-2.9 rule 3). */
   async validate(filename: string, buffer: Buffer): Promise<ImportReview> {
@@ -131,32 +114,46 @@ export class ImportService {
         : 0;
 
     // Resolve short/affiliate links (fkrt.co, amzn.in, amzn.to, pwap.in, …) to
-    // real marketplace URLs before recognizing them (network step, parallel).
-    const isListing = (u: string): boolean => this.registry.recognize(u).kind === 'listing';
-    const resolved = await mapWithConcurrency(rows, RESOLVE_CONCURRENCY, async (row) => {
-      if (!row.url)
+    // real marketplace URLs before recognizing them.
+    //
+    // Handed to the worker rather than done here. Following a share link is a
+    // request to the marketplace that issued it — fkrt.co IS Flipkart — and the
+    // identity pool, the pacing and the IP budget all live in the worker. This
+    // used to fire six at a time from the API with freshly generated headers,
+    // which is a bot signature arriving in a burst before the import has
+    // recorded a single price.
+    const followed = await this.jobs.resolveLinks(rows.map((row) => row.url));
+    const resolved = rows.map((row, i) => {
+      if (!row.url) {
         return { effectiveUrl: '', recognition: undefined as UrlRecognition | undefined };
-      let effectiveUrl = row.url;
-      let recognition = this.registry.recognize(row.url);
-      if (recognition.kind !== 'listing') {
-        try {
-          const final = await resolveListingUrl(row.url, isListing);
-          if (final && final !== row.url) {
-            effectiveUrl = final;
-            recognition = this.registry.recognize(final);
-          }
-        } catch {
-          // resolution failed (blocked/unreachable) — keep the original recognition
-        }
       }
-      return { effectiveUrl, recognition };
+      const final = followed[i];
+      const effectiveUrl = final && final !== row.url ? final : row.url;
+      return {
+        effectiveUrl,
+        recognition: this.registry.recognize(effectiveUrl),
+        // The link needed following and never got followed. Reported as its own
+        // reason: telling someone their Flipkart share link is an "unsupported
+        // site" sends them looking for a problem that is not there.
+        unfollowed: final === null,
+      };
     });
 
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i]!;
-      const { recognition, effectiveUrl } = resolved[i]!;
+      const { recognition, effectiveUrl, unfollowed } = resolved[i]!;
       if (!row.url || !recognition) {
         review.invalid.push({ rowNumber: row.rowNumber, url: '', reason: 'Missing URL' });
+        continue;
+      }
+      if (unfollowed && recognition.kind !== 'listing') {
+        review.invalid.push({
+          rowNumber: row.rowNumber,
+          url: row.url,
+          reason:
+            'Could not follow this short link — the scraper was busy or the link is unreachable. ' +
+            'Paste the full product URL instead, which needs no lookup.',
+        });
         continue;
       }
       if (recognition.kind === 'unsupported') {

@@ -47,9 +47,13 @@ export function parseAmazonPage(html: string, expectedAsin?: string): ProductSna
     $('[data-asin]').first().attr('data-asin') ??
     canonicalAsin($('link[rel="canonical"]').attr('href'));
   if (expectedAsin && pageAsin && pageAsin !== expectedAsin) {
+    // Not escalatable: Amazon redirected us to a different variant, and it
+    // redirects a browser to that same variant. The retry would cost a browser
+    // launch and an IP slot to arrive at this identical mismatch.
     throw new CheckError(
       'parse_failed',
       `Page is for ASIN ${pageAsin}, expected ${expectedAsin} (marketplace redirect)`,
+      { escalate: false },
     );
   }
 

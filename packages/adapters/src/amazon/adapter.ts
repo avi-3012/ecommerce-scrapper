@@ -89,8 +89,9 @@ export class AmazonAdapter implements MarketplaceAdapter {
    * Expand every multi-offer card into its individual offers via Amazon's
    * side-sheet AJAX endpoint — the same XHRs the real page fires, issued by the
    * same identity so they carry its jar and referer — and carry them into parse
-   * via an injected marker script. A layout change that blocks expansion throws
-   * parse_failed here — no summary-only fallback.
+   * via an injected marker script. A layout change that blocks expansion falls
+   * back to the card's summary line and notes it on the debug trail, rather than
+   * failing a check whose price was already read.
    */
   private async enrichOffers(
     page: RawPage,

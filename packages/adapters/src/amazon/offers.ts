@@ -1,6 +1,5 @@
 import * as cheerio from 'cheerio';
 import type { ScrapeDebug } from '@pricepulse/shared';
-import { CheckError } from '../errors.js';
 import type { FetchFn } from '../fetch/http.js';
 import type { RawOffer } from '../offers.js';
 
@@ -20,10 +19,10 @@ import type { RawOffer } from '../offers.js';
  * HTTP. Single-offer cards ("1 offer") already show their one offer in the card
  * summary, and their endpoint returns empty by design.
  *
- * No toleration of layout drift: if a multi-offer card can no longer be expanded
- * into its individual offers, the whole check fails as `parse_failed` so the
- * layout change surfaces as maintenance rather than silently recording partial
- * or summary-only offer data.
+ * Layout drift degrades rather than fails: a card that can no longer be expanded
+ * contributes its summary line and leaves a note on the debug trail. Enrichment
+ * is supporting detail, and it is not worth the price it would otherwise cost —
+ * see `collectAmazonOffers` for the full reasoning.
  */
 
 /** Marker script the adapter injects into the page body carrying enriched offers. */
@@ -152,9 +151,19 @@ function couponOffers($: cheerio.CheerioAPI): RawOffer[] {
 /**
  * Collect every individual offer on the page. Returns `null` when the page has
  * no offer cards at all (nothing to enrich — parse falls back to whatever the
- * DOM carries). Throws `parse_failed` when a multi-offer card cannot be expanded
- * into its individual offers (layout drift — no toleration). Network errors from
- * the AJAX fetch propagate as their transient category.
+ * DOM carries).
+ *
+ * A card that cannot be expanded DEGRADES to its summary line rather than
+ * failing the check. This reverses an earlier deliberate choice to throw on
+ * layout drift, and the reason is a matter of what each thing is worth: the
+ * price is the product's primary fact and the offer breakdown is supporting
+ * detail, so throwing away a good price because a secondary panel would not
+ * expand is the wrong trade. In one day it discarded 44 otherwise-perfect
+ * checks — a quarter of all failures — over Amazon's "Bank Offer" side-sheet.
+ *
+ * Drift is still surfaced: every degraded card leaves a note in the debug trail,
+ * so it shows in the audit row and the diagnostics bundle without costing a
+ * price.
  */
 export async function collectAmazonOffers(
   html: string,
@@ -178,26 +187,44 @@ export async function collectAmazonOffers(
       perCard.push(card.summary ? [{ label: card.title, description: card.summary }] : []);
       continue;
     }
-    // Multi-offer card: the individual offers must come from the side-sheet.
+    // Multi-offer card: the individual offers come from the side-sheet, and the
+    // summary line is the fallback whenever they cannot be had.
+    const fallback = (why: string): void => {
+      note(debug, `offers: "${card.title}" fell back to its summary — ${why}`);
+      perCard.push(card.summary ? [{ label: card.title, description: card.summary }] : []);
+    };
+
     if (!card.config?.contentId) {
-      throw new CheckError(
-        'parse_failed',
-        `Amazon offer layout changed: "${card.title}" lists ${card.count} offers but exposes no side-sheet config`,
-      );
+      fallback(`lists ${card.count} offers but exposes no side-sheet config`);
+      continue;
     }
-    const url = buildSecondaryViewUrl(asin, card.config);
-    const page = await fetchFn(url, { timeoutMs: 15_000, headers, debug, kind: 'side_sheet' });
-    const items = parseSecondaryViewOffers(page.body);
+
+    let items: string[] = [];
+    try {
+      const url = buildSecondaryViewUrl(asin, card.config);
+      const page = await fetchFn(url, { timeoutMs: 15_000, headers, debug, kind: 'side_sheet' });
+      items = parseSecondaryViewOffers(page.body);
+    } catch (err) {
+      // A 503 or a timeout on a side-sheet is Amazon declining to expand a
+      // panel, not a reason to lose the price the main page already gave us.
+      fallback(`side-sheet request failed (${err instanceof Error ? err.message : String(err)})`);
+      continue;
+    }
+
     if (items.length === 0) {
-      throw new CheckError(
-        'parse_failed',
-        `Amazon offer layout changed: "${card.title}" side-sheet yielded no individual offers`,
-      );
+      fallback('side-sheet returned no individual offers');
+      continue;
     }
     perCard.push(items.map((description) => ({ label: card.title, description })));
   }
 
   return [...couponOffers($), ...perCard.flat()];
+}
+
+/** Record a non-fatal observation on the debug trail, if one is being kept. */
+function note(debug: ScrapeDebug | undefined, message: string): void {
+  if (!debug) return;
+  (debug.notes ??= []).push(message);
 }
 
 /** Serialize enriched offers into a marker script appended to the page body. */

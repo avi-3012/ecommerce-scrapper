@@ -2,7 +2,7 @@ import { gotScraping } from 'got-scraping';
 import { Agent as Http2Agent } from 'http2-wrapper';
 import type { Marketplace, ProxyRequestKind, ScrapeDebug } from '@pricepulse/shared';
 import type { RawPage } from '../adapter.js';
-import type { FetchFn, HttpFetchOptions } from '../fetch/http.js';
+import type { FetchFn, HttpFetchOptions, ResolveHop } from '../fetch/http.js';
 import { CheckError } from '../errors.js';
 import { decompressBody, recordProxyBytes } from '../fetch/bytes.js';
 import type { Identity } from './types.js';
@@ -149,6 +149,20 @@ export class IdentitySession {
    */
   private lastResponse: { url: string; status: number; body: string; headers: unknown } | null =
     null;
+
+  /**
+   * Where the most recent hard block's body was written. Blocks are captured
+   * down in the fetch path, well below the pipeline that writes the audit row,
+   * so the path has to be carried back up — otherwise the bytes exist on disk
+   * with nothing pointing at them, and the most common failure in the system
+   * becomes the one you cannot open.
+   */
+  private lastBlockCapture: string | null = null;
+
+  /** The capture path of the last hard block on this session, if any. */
+  get lastBlockCapturePath(): string | null {
+    return this.lastBlockCapture;
+  }
 
   constructor(
     readonly identity: Identity,
@@ -430,6 +444,31 @@ export class IdentitySession {
   }
 
   /**
+   * A short-link resolution hop, made as this identity.
+   *
+   * Marked as a navigation, so it waits out the identity's own gap and takes a
+   * slot against the IP cap. Share links are overwhelmingly marketplace-operated
+   * hosts, so a burst of them is a burst at the marketplace — that it returns a
+   * 302 instead of a product page does not make it free, and pretending it does
+   * is how an import poisons an address before a single price is checked.
+   */
+  resolveHop(): ResolveHop {
+    return async (url, timeoutMs) => {
+      const response = await this.request(url, {
+        kind: 'resolve',
+        followRedirect: false,
+        navigation: true,
+        timeoutMs,
+      });
+      const raw = response.headers['location'];
+      return {
+        statusCode: response.statusCode,
+        location: Array.isArray(raw) ? raw[0] : raw,
+      };
+    };
+  }
+
+  /**
    * Warm-up: a fresh identity loads the site's homepage once, collecting the
    * cookies a real first visit would leave behind, before it ever asks for a
    * product page. Its first product request then carries the homepage as its
@@ -632,17 +671,18 @@ export class IdentitySession {
     }
     // Every block also gets a FULL capture, which is what you actually want
     // when diagnosing one after the fact.
-    captureFailure({
-      dir: this.pool.store.dir,
-      marketplace: this.marketplace,
-      url: response.url,
-      identityId: this.identity.id,
-      reason,
-      detail,
-      status: response.statusCode,
-      body: response.body,
-      headers: response.headers as Record<string, unknown>,
-    });
+    this.lastBlockCapture =
+      captureFailure({
+        dir: this.pool.store.dir,
+        marketplace: this.marketplace,
+        url: response.url,
+        identityId: this.identity.id,
+        reason,
+        detail,
+        status: response.statusCode,
+        body: response.body,
+        headers: response.headers as Record<string, unknown>,
+      })?.path ?? null;
     IdentitySession.siteBlockedAt.set(siteKeyOf(response.url), Date.now());
     console.warn(
       `[identity] hard_block ${reason} on ${this.marketplace} via ${this.identity.id} ` +

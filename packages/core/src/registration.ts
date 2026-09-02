@@ -1,6 +1,6 @@
 import type { PrismaClient, Product } from '@pricepulse/db';
 import type { AdapterRegistry, FetchFn, IdentitySession } from '@pricepulse/adapters';
-import { resolveListingUrl } from '@pricepulse/adapters';
+import { resolveListingUrl, shortLinkMarketplace } from '@pricepulse/adapters';
 import type { Marketplace, ProductSnapshot } from '@pricepulse/shared';
 import { performCheck } from './scrape/pipeline.js';
 import { recordCheck } from './scrape/record.js';
@@ -33,8 +33,10 @@ export interface RegistrationDeps {
   registry: AdapterRegistry;
   /**
    * Borrow an identity for one preview fetch, and hand it back afterwards.
-   * Returns null when the pool has nothing free. Absent ⇒ no live fetching
-   * (the bulk-import path, which only ever resolves short links).
+   * Returns null when the pool has nothing free. Absent ⇒ no outbound requests
+   * at all, INCLUDING short-link resolution: following a share link is a
+   * request to the marketplace that issued it, so a caller with no identity to
+   * spend declines to resolve rather than resolving as a stranger.
    */
   acquireIdentity?: (
     marketplace: Marketplace,
@@ -46,6 +48,38 @@ export interface RegistrationDeps {
    * marketplace request.
    */
   maxProducts?: number;
+}
+
+/**
+ * Follow a share/affiliate link to the real listing URL, as a borrowed identity.
+ *
+ * The identity is chosen by who OPERATES the short link: `fkrt.co` is followed
+ * by a Flipkart identity so the hop carries that site's jar and spends that
+ * site's budget. A third-party shortener has no such relationship, so any
+ * identity will do and we take whatever the pool offers.
+ *
+ * Returns null when nothing could be resolved — no identity was free, or the
+ * hop failed. The caller keeps the original URL and reports it as unrecognised,
+ * which is the honest outcome: we did not learn what the link points at.
+ */
+export async function resolveShortLink(
+  deps: RegistrationDeps,
+  url: string,
+): Promise<string | null> {
+  if (!deps.acquireIdentity) return null;
+  const operator = shortLinkMarketplace(url);
+  const borrowed =
+    deps.acquireIdentity(operator ?? 'amazon_in') ?? deps.acquireIdentity('flipkart');
+  if (!borrowed) return null;
+  try {
+    return await resolveListingUrl(url, (u) => deps.registry.recognize(u).kind === 'listing', {
+      hop: borrowed.session.resolveHop(),
+    });
+  } catch {
+    return null; // blocked or unreachable — best effort, never fatal
+  } finally {
+    deps.releaseIdentity?.(borrowed.session);
+  }
 }
 
 /** Thrown when a write would exceed the configured product cap. */
@@ -90,21 +124,11 @@ export async function previewUrl(deps: RegistrationDeps, input: string): Promise
 
   // Any share/affiliate short link (fkrt.co, amzn.in, amzn.to, pwap.in, …)
   // carries no product id — follow its redirects to the real marketplace URL.
-  // resolveListingUrl stops at the listing URL without loading the marketplace
-  // page, so it's fast, cheap on bandwidth, and never touches the marketplace —
-  // which is why it needs no identity of its own.
   if (recognition.kind !== 'listing') {
-    try {
-      const final = await resolveListingUrl(
-        trimmed,
-        (u) => registry.recognize(u).kind === 'listing',
-      );
-      if (final && final !== trimmed) {
-        effectiveUrl = final;
-        recognition = registry.recognize(final);
-      }
-    } catch {
-      // resolution failed (blocked/unreachable) — fall through to the messages below
+    const final = await resolveShortLink(deps, trimmed);
+    if (final && final !== trimmed) {
+      effectiveUrl = final;
+      recognition = registry.recognize(final);
     }
   }
 

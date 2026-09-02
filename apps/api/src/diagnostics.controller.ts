@@ -39,6 +39,10 @@ export class DiagnosticsController {
           lastSuccessAt: true,
           lastChangedAt: true,
           nextCheckAt: true,
+          // When tracking began. Without it the bundle cannot answer "did this
+          // start failing when it was imported, or later?" — which is the first
+          // question asked of any batch of products that all fail together.
+          createdAt: true,
         },
       }),
       // Failures only: a successful check is not what anyone is debugging, and
