@@ -116,6 +116,13 @@ export interface GovernorState {
   degradedUntil: number | null;
   /** Epoch ms of the most recent hard block, for backoff decay. */
   lastBlockAt: number | null;
+  /**
+   * Epoch ms of the most recent request actually sent. Separate from
+   * `requests`, which is pruned to 60 s: the adaptive controller needs to know
+   * whether ANY traffic went out since it last climbed, and that question
+   * outlives the cap's one-minute window.
+   */
+  lastRequestAt?: number | null;
 }
 
 function emptyState(): GovernorState {
@@ -130,6 +137,7 @@ function emptyState(): GovernorState {
     pausedUntil: null,
     degradedUntil: null,
     lastBlockAt: null,
+    lastRequestAt: null,
   };
 }
 
@@ -287,6 +295,23 @@ export class IpGovernor {
       return Math.min(Math.max(rate, adaptive.minPerMin), adaptive.maxPerMin);
     }
 
+    // The climb has to be EARNED by traffic that actually went out.
+    //
+    // "Quiet" below means nothing objected — but during a global backoff nothing
+    // objects because nothing is sent, so the controller used to recover the
+    // whole way to its ceiling while it was learning nothing. On 3 Sep 2026 it
+    // climbed 8 → 16/min through a pause in which it made zero requests, and
+    // would have resumed at full rate into the same wall that caused the pause.
+    // Freezing the clock rather than just skipping the step also means the
+    // paused span cannot be cashed in as accrued credit the moment it lifts.
+    const lastRequestAt = this.state.lastRequestAt ?? null;
+    const sentSinceIncrease = lastRequestAt !== null && lastRequestAt >= this.state.lastIncreaseAt;
+    if (this.pausedNow(now) !== null || !sentSinceIncrease) {
+      this.state.lastIncreaseAt = now;
+      this.persist();
+      return Math.min(Math.max(rate, adaptive.minPerMin), adaptive.maxPerMin);
+    }
+
     // Additive increase, but only while nothing has objected recently. A block
     // inside the last increase interval means we are already at the edge.
     const sinceIncrease = now - this.state.lastIncreaseAt;
@@ -339,6 +364,7 @@ export class IpGovernor {
   recordRequest(now: number = Date.now()): void {
     this.reload();
     this.state.requests.push(now);
+    this.state.lastRequestAt = now;
     const bucketStart = Math.floor(now / USAGE_BUCKET_MS) * USAGE_BUCKET_MS;
     const last = this.state.usageBuckets[this.state.usageBuckets.length - 1];
     if (last && last[0] === bucketStart) last[1] += 1;

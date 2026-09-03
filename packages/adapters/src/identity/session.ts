@@ -292,7 +292,9 @@ export class IdentitySession {
   private async awaitSlot(): Promise<void> {
     const deadline = Date.now() + MAX_SLOT_WAIT_MS;
     for (;;) {
-      if (this.signal?.aborted) throw new CheckError('other', 'Shutting down');
+      if (this.signal?.aborted) {
+        throw new CheckError('other', 'Shutting down', { attempted: false });
+      }
       const decision = this.governor.canRequest();
       if (decision.allowed) return;
       // Waiting out a MULTI-HOUR global pause inside a request is not patience,
@@ -305,6 +307,7 @@ export class IdentitySession {
         throw new CheckError(
           'other',
           `Fetching is paused (${decision.reason}); giving up this check rather than blocking the cycle`,
+          { attempted: false },
         );
       }
       await sleep(Math.min(decision.retryAfterMs, 1_000));

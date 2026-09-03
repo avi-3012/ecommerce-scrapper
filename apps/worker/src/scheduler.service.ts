@@ -46,6 +46,8 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
   private cycleEndsAt = 0;
   /** The last stretch warning emitted, so a standing fact is stated once. */
   private lastStretchWarning = '';
+  /** The gate reason currently being waited out, so the skip is logged once. */
+  private lastGateReason = '';
   private bannerPrinted = false;
 
   constructor(
@@ -98,6 +100,33 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     // recovery is gradual rather than a visible step change.
     this.identities.pool.ensureSize(Date.now(), MAX_REFILL_PER_PASS);
     const config = this.identities.config;
+
+    // While the global backoff or the kill switch is on, DON'T DISPATCH.
+    //
+    // The governor is a hard gate on requests, but it was never a gate on the
+    // cycle: the scheduler kept selecting every due product and handing each to
+    // a fetch that waited 90 s at the gate and gave up. Nothing left the
+    // machine and everything was recorded as a failed check, so a 107-second
+    // Amazon block on 3 Sep 2026 turned into an 89-minute mill that auto-paused
+    // all 22 active products. Backing off means sending nothing, and a cycle
+    // that sends nothing has no reason to run.
+    //
+    // Only `backoff` and `kill_switch` skip. `cap` means the minute's budget is
+    // momentarily full, which is the normal steady state the planner exists to
+    // spread work across — skipping on that would stall the loop at capacity.
+    const gate = this.identities.governor.canRequest();
+    if (!gate.allowed && (gate.reason === 'backoff' || gate.reason === 'kill_switch')) {
+      if (this.lastGateReason !== gate.reason) {
+        console.warn(
+          `[identity] WARN cycle skipped — ${gate.reason}. No products are dispatched while ` +
+            `fetching is stopped; their failure counts and next-check times are left alone.`,
+        );
+        this.lastGateReason = gate.reason;
+      }
+      return;
+    }
+    this.lastGateReason = '';
+
     const capPerMin = this.identities.governor.capPerMin();
     const due = await this.dueProducts(config.cycle.maxSec * 1_000);
 

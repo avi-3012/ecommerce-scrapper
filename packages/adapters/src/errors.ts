@@ -20,14 +20,30 @@ export class CheckError extends Error {
    */
   readonly escalate: boolean;
 
+  /**
+   * Whether a request was actually made. False means the check was abandoned
+   * before anything left the machine — the global backoff was running, or the
+   * kill switch was on.
+   *
+   * The distinction matters because a product's failure budget is meant to
+   * measure THAT PRODUCT: a listing that has gone bad, a layout we can no
+   * longer read. A check we declined to send says nothing about the product,
+   * and counting it means one connection-level incident retires the whole
+   * catalogue — which is exactly what happened on 3 Sep 2026, when a
+   * 107-second Amazon block became an 89-minute mill that auto-paused all 22
+   * active products on failures that were never sent.
+   */
+  readonly attempted: boolean;
+
   constructor(
     readonly reason: FailureReason,
     detail: string,
-    options: { escalate?: boolean } = {},
+    options: { escalate?: boolean; attempted?: boolean } = {},
   ) {
     super(detail);
     this.name = 'CheckError';
     this.escalate = options.escalate ?? true;
+    this.attempted = options.attempted ?? true;
   }
 }
 

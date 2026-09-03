@@ -44,6 +44,22 @@ export async function recordCheck(
     tiers,
   );
 
+  // A check that never made a request is not evidence about this product.
+  //
+  // It leaves the product's failure budget, its last-checked time and its
+  // history untouched, and only pushes the next attempt out. Recording it as a
+  // failure is how a connection-level incident becomes a catalogue-level one:
+  // during a 3-hour backoff the scheduler dispatches every due product every
+  // cycle, each one is refused at the gate in ~90 s, and every product in the
+  // catalogue burns its whole failure budget on checks that were never sent.
+  if (!outcome.ok && 'error' in outcome && !outcome.error.attempted) {
+    await prisma.product.update({
+      where: { id: product.id },
+      data: { nextCheckAt },
+    });
+    return { success: false, events: [], autoPaused: false, alertIds: [] };
+  }
+
   if (!outcome.ok) {
     const failures = product.consecutiveFailures + 1;
     const shouldAutoPause =

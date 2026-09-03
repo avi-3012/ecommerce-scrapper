@@ -126,14 +126,43 @@ describe('adaptive rate control', () => {
   it('climbs while responses stay clean', () => {
     const { governor } = rig(adaptive());
     expect(governor.learnedPerMin(NOON_IST)).toBe(30);
-    // Five clean minutes at one per-minute step each.
+    // Five clean minutes at one per-minute step each. The climb has to be
+    // earned by traffic that actually went out, so the interval carries a
+    // request.
+    governor.recordRequest(NOON_IST + 60_000);
     expect(governor.learnedPerMin(NOON_IST + 5 * 60_000)).toBe(35);
   });
 
   it('never climbs past maxPerMin', () => {
     const { governor } = rig(adaptive({ maxPerMin: 33 }));
     governor.learnedPerMin(NOON_IST); // starts the clock
+    governor.recordRequest(NOON_IST + 1_000);
     expect(governor.learnedPerMin(NOON_IST + 24 * 3600_000)).toBe(33);
+  });
+
+  // The 3 Sep 2026 incident: the controller recovered 8 → 16/min DURING a
+  // three-hour pause, learning nothing, and would have resumed at full rate
+  // into the wall that caused the pause.
+  it('does NOT climb while the global backoff is running', () => {
+    const { governor } = rig(adaptive({ minPerMin: 4 }));
+    let now = NOON_IST;
+    for (let i = 0; i < 8; i++) governor.recordHardBlock((now += 1_000));
+    const floored = governor.learnedPerMin(now);
+    expect(governor.canRequest(now).reason).toBe('backoff');
+    // An hour of a three-hour pause goes by. Nothing was sent, so nothing was
+    // learned, and the rate must be exactly where the incident left it.
+    expect(governor.learnedPerMin(now + 3600_000)).toBe(floored);
+  });
+
+  it('does NOT climb through an idle stretch, and does not bank it as credit', () => {
+    const { governor } = rig(adaptive());
+    expect(governor.learnedPerMin(NOON_IST)).toBe(30);
+    // An hour with no requests at all — a paused catalogue, an empty queue.
+    expect(governor.learnedPerMin(NOON_IST + 3600_000)).toBe(30);
+    // Traffic resumes: the climb restarts from here rather than cashing in the
+    // idle hour as sixty clean intervals.
+    governor.recordRequest(NOON_IST + 3600_000 + 1_000);
+    expect(governor.learnedPerMin(NOON_IST + 3600_000 + 120_000)).toBe(32);
   });
 
   it('halves on a hard block, immediately — not at a threshold', () => {
