@@ -128,6 +128,11 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         );
         this.lastGateReason = gate.reason;
       }
+      // Still a completed pass. "Last monitoring run" means the scheduler last
+      // finished a cycle, not that it last found work — leaving the timestamp
+      // frozen through a backoff makes a healthy, correctly-waiting worker look
+      // like a dead one, which is the opposite of what the dashboard is for.
+      await this.updateSystemStatus(cycleStart, 0, 0, 0, 0);
       return;
     }
     this.lastGateReason = '';
@@ -160,7 +165,13 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       this.lastStretchWarning = '';
     }
 
-    if (due.length === 0) return;
+    if (due.length === 0) {
+      // Nothing was due — an empty catalogue, or everything checked recently.
+      // Recorded so the dashboard shows a live scheduler rather than a
+      // last-run time that stopped moving for a reason nobody can see.
+      await this.updateSystemStatus(cycleStart, 0, 0, 0, 0);
+      return;
+    }
 
     let succeeded = 0;
     let failed = 0;
