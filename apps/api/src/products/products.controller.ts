@@ -19,6 +19,7 @@ import {
   ProductLimitError,
   deleteProduct,
   deletionImpact,
+  inCapacityIds,
   pauseProduct,
   registerProduct,
   resumeAllProducts,
@@ -156,10 +157,10 @@ export class ProductsController {
       maxProducts: max,
       current,
       message:
-        `Tracking ${current} of a maximum ${max} products. Requests per minute is ` +
-        `products ÷ interval, so this cap is what keeps the catalogue inside what the ` +
-        `connection can actually serve. Remove a product, lengthen the interval, or raise ` +
-        `limits.maxProducts in the scraping config.`,
+        `Tracking ${current} of a maximum ${max} products. This is a cap on how many ` +
+        `products may be STORED, and it is off by default — if you want an unlimited ` +
+        `catalogue, set limits.maxProducts to 0 and use limits.capacity instead, which ` +
+        `bounds how many are scraped rather than how many you may keep.`,
     };
   }
 
@@ -251,7 +252,17 @@ export class ProductsController {
       }),
       this.prisma.product.count({ where }),
     ]);
-    return { items, total, page: q.page, pageSize: q.pageSize };
+    // Mark which rows the scraper is actually spending requests on. An active
+    // product below the capacity line is never checked, and without this it
+    // looks identical to one that is — the only visible difference would be a
+    // last-checked time that quietly stops moving.
+    const capacity = await inCapacityIds(this.prisma, loadScrapingConfigSafely().limits.capacity);
+    return {
+      items: items.map((p) => ({ ...p, scraped: capacity ? capacity.has(p.id) : true })),
+      total,
+      page: q.page,
+      pageSize: q.pageSize,
+    };
   }
 
   @Get(':id')
@@ -261,7 +272,8 @@ export class ProductsController {
       include: { category: { select: { id: true, name: true, color: true } } },
     });
     if (!product) throw new NotFoundException();
-    return product;
+    const capacity = await inCapacityIds(this.prisma, loadScrapingConfigSafely().limits.capacity);
+    return { ...product, scraped: capacity ? capacity.has(product.id) : true };
   }
 
   /** FR-2.3 made visible: every check, success or failure with reason. */

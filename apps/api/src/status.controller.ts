@@ -1,5 +1,6 @@
 import { Controller, Get, Inject } from '@nestjs/common';
 import { PrismaService } from './prisma.service.js';
+import { capacityUsage } from '@pricepulse/core';
 import { loadScrapingConfigSafely } from './scraping-config.js';
 
 /** System health snapshot (NFR-2, FR-5.1): what the dashboard banner and bot /status read. */
@@ -28,6 +29,7 @@ export class StatusController {
         }),
       ]);
 
+    const capacity = await capacityUsage(this.prisma, loadScrapingConfigSafely().limits.capacity);
     const heartbeatAt = status?.workerHeartbeatAt ?? null;
     const workerStale = heartbeatAt === null || Date.now() - heartbeatAt.getTime() > 120_000;
 
@@ -41,6 +43,13 @@ export class StatusController {
         // The hard cap, so the dashboard can show how much room is left rather
         // than letting someone discover it by being refused.
         max: loadScrapingConfigSafely().limits.maxProducts || null,
+        // Scraping capacity: how many of the active products are actually being
+        // checked, and how many are queued behind them waiting on priority.
+        // Without this the queued ones look active and simply never update,
+        // which is indistinguishable from the scraper being broken.
+        capacity: capacity.capacity || null,
+        scraped: capacity.scraped,
+        waiting: capacity.waiting,
       },
       alertsLast24h: alerts24h,
       dropsLast24h: drops24h,

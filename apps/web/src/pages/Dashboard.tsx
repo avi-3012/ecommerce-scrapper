@@ -57,8 +57,15 @@ export function DashboardPage(): JSX.Element {
           icon={Package}
           tone="brand"
           sub={
-            `${status.products.active} active · ` +
-            `${status.products.pausedUser + status.products.pausedAuto} paused` +
+            // Capacity is the number that matters when it is set: "active" and
+            // "being checked" stop being the same thing above the line.
+            (status.products.capacity
+              ? `${status.products.scraped} of ${status.products.capacity} being checked` +
+                (status.products.waiting > 0
+                  ? ` · ${status.products.waiting} waiting on priority`
+                  : '')
+              : `${status.products.active} active`) +
+            ` · ${status.products.pausedUser + status.products.pausedAuto} paused` +
             (status.products.max
               ? ` · ${status.products.total}/${status.products.max} of limit`
               : '')

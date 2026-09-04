@@ -86,6 +86,12 @@ export interface Product {
   lastSuccessAt: string | null;
   lastChangedAt: string | null;
   createdAt: string;
+  /**
+   * Whether the scraper is actually checking this product. False means it is
+   * active but sitting below the capacity line — raise its priority, or raise
+   * capacity, and it starts being checked.
+   */
+  scraped: boolean;
 }
 
 /** FR-5.5: current price at or within the near-low margin of the recorded low. */
@@ -154,6 +160,12 @@ export interface SystemStatusReport {
     failing: number;
     /** Hard cap on tracked products, or null when uncapped. */
     max: number | null;
+    /** How many products may be SCRAPED at once, or null when uncapped. */
+    capacity: number | null;
+    /** Active products currently inside capacity (being checked). */
+    scraped: number;
+    /** Active products queued behind capacity, waiting on priority. */
+    waiting: number;
   };
   alertsLast24h: number;
   dropsLast24h: number;

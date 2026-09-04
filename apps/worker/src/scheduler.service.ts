@@ -1,6 +1,11 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type { OnModuleDestroy, OnModuleInit } from '@nestjs/common';
-import { getUserWithSettings, minutesOfDayIn, pruneScrapeAudits } from '@pricepulse/core';
+import {
+  getUserWithSettings,
+  inCapacityIds,
+  minutesOfDayIn,
+  pruneScrapeAudits,
+} from '@pricepulse/core';
 import {
   MAX_REFILL_PER_PASS,
   planCycle,
@@ -262,6 +267,15 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     // the window (see `runCycle`), so the horizon widens what is eligible
     // without making anything fire early.
     const horizon = new Date(Date.now() + horizonMs);
+    // Capacity restricts WHO may be checked: the top N products by priority.
+    // Everything below the line is simply not selected, which is what lets the
+    // catalogue grow past what the connection can serve without the request
+    // rate growing with it.
+    //
+    // Suspects are exempt. A suspect re-check is the second half of a check
+    // already paid for, and dropping it wastes the first half while leaving a
+    // price recorded as unconfirmed. There are only ever a handful.
+    const capacity = await inCapacityIds(this.prisma, this.identities.config.limits.capacity);
     const [suspects, normal] = await Promise.all([
       dueSuspects.length
         ? this.prisma.product.findMany({
@@ -269,7 +283,11 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
           })
         : Promise.resolve([]),
       this.prisma.product.findMany({
-        where: { status: 'active', nextCheckAt: { lte: horizon } },
+        where: {
+          status: 'active',
+          nextCheckAt: { lte: horizon },
+          ...(capacity ? { id: { in: [...capacity] } } : {}),
+        },
         orderBy: { nextCheckAt: 'asc' },
       }),
     ]);
@@ -304,8 +322,11 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
 
     // Mark everything due, shortest interval first. The cycle planner then
     // spreads the sweep across as many windows as the cap requires.
+    // Only what capacity will actually check. Queuing the rest would mark them
+    // due for a sweep that is never going to reach them.
+    const capacity = await inCapacityIds(this.prisma, this.identities.config.limits.capacity);
     const products = await this.prisma.product.findMany({
-      where: { status: 'active' },
+      where: { status: 'active', ...(capacity ? { id: { in: [...capacity] } } : {}) },
       select: { id: true, checkIntervalMinutes: true },
     });
     const ordered = [...products].sort(

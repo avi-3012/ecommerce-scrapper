@@ -84,8 +84,24 @@
   "$comment_maxConcurrent": "56/min is ~0.93/s; at up to 8s per fetch that needs ~7.5 in flight. 10 gives margin without bursting.",
   "maxConcurrent": 10,
   "limits": {
-    "$comment": "maxProducts is a HARD CAP: registration refuses the 51st product. The catalogue silently outgrowing what the connection can serve is the exact failure this prevents.",
-    "maxProducts": 50,
+    "$comment": [
+      "capacity caps what is SCRAPED; maxProducts caps what is STORED.",
+      "",
+      "Track as many products as you like — maxProducts 0 means the catalogue is",
+      "unlimited. The top `capacity` of them by priority (1 = first) are the ones",
+      "the scheduler spends requests on; the rest wait, and are shown as",
+      "'waiting on priority' rather than silently going stale.",
+      "",
+      "Why 50: requests/min is roughly 1.1 x products / interval, and 4.4/min is",
+      "the rate this address has actually held at 97.7% success. 50 products at a",
+      "12-minute interval is 4.6/min — the same traffic Amazon already tolerates,",
+      "just spread over a bigger catalogue. Raise it only against a `ramp` number.",
+      "",
+      "A slot frees the moment its holder stops being active, so an auto-paused",
+      "listing hands its slot to the next product down rather than holding it."
+    ],
+    "capacity": 50,
+    "maxProducts": 0,
     "refuseWhenStretched": false
   }
 }

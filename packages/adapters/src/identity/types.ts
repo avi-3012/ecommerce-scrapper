@@ -182,13 +182,30 @@ export interface ScrapingConfig {
   };
   limits: {
     /**
-     * Hard cap on tracked products. Registration refuses beyond it.
+     * How many products are actively SCRAPED, highest priority first.
      *
      * Requests per minute is `products ÷ interval`, so an unbounded catalogue is
      * an unbounded request rate — and the catalogue grows one harmless-looking
-     * product at a time, long after anyone last thought about the budget. A cap
-     * makes the limit something you decide once rather than discover from a
-     * block rate. 0 disables it.
+     * product at a time, long after anyone last thought about the budget.
+     *
+     * Capacity bounds the rate without bounding the catalogue. Track as many
+     * products as you like; the top `capacity` of them by `priority` are the
+     * ones the scheduler spends requests on, and the rest wait their turn
+     * without being checked. Reordering the list is then how you choose what
+     * gets watched, which is a decision about what matters rather than a wall
+     * you hit while adding.
+     *
+     * A slot is freed the moment its holder stops being `active` — auto-paused
+     * or paused by hand — so a dead listing does not hold a slot forever.
+     * 0 disables the limit and scrapes everything due.
+     */
+    capacity: number;
+    /**
+     * Hard cap on how many products may EXIST, refused at registration and
+     * import. Distinct from `capacity`, which caps what is scraped: this one
+     * caps what is stored. 0 disables it, which is the default — the request
+     * budget is `capacity`'s job, and refusing to remember a product protects
+     * nothing.
      */
     maxProducts: number;
     /**

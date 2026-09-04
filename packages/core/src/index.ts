@@ -3,6 +3,7 @@ export * from './alerts/hygiene.js';
 export * from './scrape/pipeline.js';
 export * from './scrape/record.js';
 export * from './scrape/audit.js';
+export * from './scrape/capacity.js';
 export * from './registration.js';
 export * from './settings.js';
 export * from './telegram/messages.js';

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  Clock,
   ExternalLink,
   Flag,
   Flame,
@@ -458,6 +459,11 @@ function MetaBadges({ product }: { product: Product }): JSX.Element {
       {product.linkedProductId && (
         <Badge tone="info" icon={Link2}>
           linked
+        </Badge>
+      )}
+      {product.status === 'active' && !product.scraped && (
+        <Badge tone="warning" icon={Clock}>
+          waiting on priority
         </Badge>
       )}
       {product.consecutiveFailures > 0 && product.status === 'active' && (

@@ -45,7 +45,7 @@ export const DEFAULT_SCRAPING_CONFIG: ScrapingConfig = {
   maxConcurrent: 2,
   diurnal: { enabled: true },
   tiers: { warmAfterHours: 6, coldAfterHours: 72, warmMultiplier: 4, coldMultiplier: 15 },
-  limits: { maxProducts: 0, refuseWhenStretched: true },
+  limits: { capacity: 0, maxProducts: 0, refuseWhenStretched: true },
 };
 
 /**
@@ -139,6 +139,7 @@ export function mergeConfig(raw: unknown): ScrapingConfig {
       coldMultiplier: num(tiers.coldMultiplier, d.tiers.coldMultiplier, 1, 500),
     },
     limits: {
+      capacity: int(limits.capacity, d.limits.capacity, 0, 100_000),
       maxProducts: int(limits.maxProducts, d.limits.maxProducts, 0, 100_000),
       refuseWhenStretched: bool(limits.refuseWhenStretched, d.limits.refuseWhenStretched),
     },
