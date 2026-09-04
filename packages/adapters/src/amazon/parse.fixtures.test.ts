@@ -219,6 +219,40 @@ describe('amazon fixture suite (WP-1.2)', () => {
     }
   });
 
+  it('never reads a sponsored carousel tile as the page ASIN', () => {
+    // `[data-asin]` litters the recommendation strips. Taking the first one in
+    // DOM order would report an unrelated product as a variant mismatch.
+    const html = `<html><body>
+      <div data-asin="B0SPONSORED"><span>Sponsored</span></div>
+      <div id="ppd"><input type="hidden" id="ASIN" value="B0REALASIN"></div>
+      <span id="productTitle">Real product</span>
+      <div id="corePrice_feature_div"><span class="a-offscreen">₹1,000</span></div>
+    </body></html>`;
+    expect(() => parseAmazonPage(html, 'B0REALASIN')).not.toThrowError(/Page is for ASIN/);
+  });
+
+  it('falls back to the canonical link before any data-asin', () => {
+    const html = `<html><head>
+      <link rel="canonical" href="https://www.amazon.in/dp/B0REALASIN">
+      </head><body>
+      <div data-asin="B0SPONSORED"><span>Sponsored</span></div>
+      <span id="productTitle">Real product</span>
+      <div id="corePrice_feature_div"><span class="a-offscreen">₹1,000</span></div>
+    </body></html>`;
+    expect(() => parseAmazonPage(html, 'B0REALASIN')).not.toThrowError(/Page is for ASIN/);
+  });
+
+  it('treats a blank ASIN field as absent rather than as a mismatch', () => {
+    const html = `<html><head>
+      <link rel="canonical" href="https://www.amazon.in/dp/B0REALASIN">
+      </head><body>
+      <input type="hidden" id="ASIN" value="  ">
+      <span id="productTitle">Real product</span>
+      <div id="corePrice_feature_div"><span class="a-offscreen">₹1,000</span></div>
+    </body></html>`;
+    expect(() => parseAmazonPage(html, 'B0REALASIN')).not.toThrowError(/Page is for ASIN/);
+  });
+
   it('fixture: unknown future layout fails cleanly as parse_failed', () => {
     expect(() =>
       parseAmazonPage('<html><body><div>totally new layout</div></body></html>'),

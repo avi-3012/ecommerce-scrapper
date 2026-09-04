@@ -42,10 +42,22 @@ export function parseAmazonPage(html: string, expectedAsin?: string): ProductSna
   const provenance: Record<string, string> = {};
 
   // ── ASIN echo (variant discipline, BRD R-5) ──
+  // Ordered by how authoritative each signal is about THIS page's product.
+  //
+  // `input#ASIN` is the buy-box's own hidden field and is definitive. The
+  // canonical link is next: Amazon points it at the listing the page IS.
+  //
+  // A bare `[data-asin]` was second here, and that is a trap: on a real product
+  // page the attribute is all over the sponsored carousels and the
+  // "customers also viewed" strips, so `.first()` in DOM order can easily be an
+  // unrelated product. Reading it as this page's ASIN turns any layout where
+  // the hidden field is missing into a variant mismatch naming a random
+  // product. It stays only as a last resort, scoped to the detail-page
+  // containers rather than the whole document.
   const pageAsin =
-    $('input#ASIN').attr('value') ??
-    $('[data-asin]').first().attr('data-asin') ??
-    canonicalAsin($('link[rel="canonical"]').attr('href'));
+    text($('input#ASIN').attr('value')) ??
+    canonicalAsin($('link[rel="canonical"]').attr('href')) ??
+    text($('#dp [data-asin], #ppd [data-asin], #centerCol [data-asin]').first().attr('data-asin'));
   if (expectedAsin && pageAsin && pageAsin !== expectedAsin) {
     // Not escalatable: Amazon redirected us to a different variant, and it
     // redirects a browser to that same variant. The retry would cost a browser
@@ -215,6 +227,12 @@ function detectInterstitials(html: string): void {
   if (/Looking for something\?[\s\S]*we can(?:'|no)t find that page/i.test(html)) {
     throw new CheckError('listing_removed', 'Amazon page-not-found content');
   }
+}
+
+/** Trim an attribute, treating blank as absent so it falls through to the next signal. */
+function text(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
 }
 
 function canonicalAsin(href: string | undefined): string | undefined {
