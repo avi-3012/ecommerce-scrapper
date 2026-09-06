@@ -34,6 +34,22 @@ export const BACKOFF_DECAY_MS = 6 * 3600_000;
 export const USAGE_BUCKET_MS = 5 * 60_000;
 
 /**
+ * How much headroom over recent demand the adaptive ceiling is allowed to hold
+ * before it stops climbing.
+ *
+ * The climb exists to find capacity we can USE. Once the ceiling is comfortably
+ * above what the catalogue actually asks for, raising it further buys nothing —
+ * demand is set by products ÷ interval, not by permission — while every step
+ * probes further into territory the far end may refuse. On 6 Sep 2026 the
+ * ceiling drifted to 90/min against roughly 10/min of real demand, and the
+ * window ended in a 16-block burst and a three-hour pause.
+ */
+const DEMAND_HEADROOM = 1.5;
+
+/** How far back to measure demand. Long enough to span a few cycles. */
+const DEMAND_WINDOW_MS = 15 * 60_000;
+
+/**
  * Share of the daytime rate to run in each IST hour, 00:00 → 23:00.
  *
  * A binary day/night switch produces a step function: flat all day, flat all
@@ -312,6 +328,16 @@ export class IpGovernor {
       return Math.min(Math.max(rate, adaptive.minPerMin), adaptive.maxPerMin);
     }
 
+    // Don't probe for headroom we are not using. Demand cannot exceed the
+    // ceiling, so this only ever bites when the ceiling is genuinely idle
+    // capacity — a saturated connection draining a backlog still climbs.
+    const demand = this.recentUsagePerMin(now);
+    if (rate >= demand * DEMAND_HEADROOM) {
+      this.state.lastIncreaseAt = now;
+      this.persist();
+      return Math.min(Math.max(rate, adaptive.minPerMin), adaptive.maxPerMin);
+    }
+
     // Additive increase, but only while nothing has objected recently. A block
     // inside the last increase interval means we are already at the edge.
     const sinceIncrease = now - this.state.lastIncreaseAt;
@@ -461,6 +487,23 @@ export class IpGovernor {
    * rather than a second array of timestamps, because this number decides
    * whether to change the rate by 40% and does not need to be exact.
    */
+  /**
+   * Requests per minute sent over the demand window — a flat average across the
+   * whole window, not across the span the buckets happen to cover.
+   *
+   * Averaging over the fixed window is the conservative reading, and that is
+   * the point. A short burst divided by the full window looks like modest
+   * demand, so a connection that has only just resumed has to sustain its load
+   * before the ceiling will rise for it. Sizing the ceiling off a burst is what
+   * lets it run away from what the catalogue actually needs.
+   */
+  private recentUsagePerMin(now: number, windowMs: number = DEMAND_WINDOW_MS): number {
+    const requests = this.state.usageBuckets
+      .filter(([t]) => now - t <= windowMs)
+      .reduce((sum, [, n]) => sum + n, 0);
+    return requests / (windowMs / 60_000);
+  }
+
   private recentBlockRatio(now: number, windowMs: number = BLOCK_BURST.windowMs): number {
     const blocks = this.state.blocks.filter((t) => now - t <= windowMs).length;
     const requests = this.state.usageBuckets

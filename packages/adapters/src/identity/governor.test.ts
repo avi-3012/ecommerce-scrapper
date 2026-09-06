@@ -99,6 +99,18 @@ describe('kill switch', () => {
   });
 });
 
+/**
+ * Drive real traffic through the governor. The adaptive ceiling only climbs
+ * when the connection is actually using the headroom it already has, so a test
+ * about climbing has to supply demand — one lone request does not justify
+ * raising a 30/min ceiling, and the controller is right to refuse.
+ */
+function saturate(governor: IpGovernor, fromMs: number, toMs: number, perMin: number): void {
+  for (let t = fromMs; t < toMs; t += 60_000) {
+    for (let i = 0; i < perMin; i++) governor.recordRequest(t + i);
+  }
+}
+
 describe('adaptive rate control', () => {
   const adaptive = (over: Record<string, unknown> = {}): Partial<ScrapingConfig> =>
     withCap({
@@ -126,18 +138,19 @@ describe('adaptive rate control', () => {
   it('climbs while responses stay clean', () => {
     const { governor } = rig(adaptive());
     expect(governor.learnedPerMin(NOON_IST)).toBe(30);
-    // Five clean minutes at one per-minute step each. The climb has to be
-    // earned by traffic that actually went out, so the interval carries a
-    // request.
-    governor.recordRequest(NOON_IST + 60_000);
+    // Five clean minutes at one per-minute step each. The connection has to be
+    // sustaining real load for the extra headroom to be worth anything, so the
+    // window carries traffic at the ceiling.
+    saturate(governor, NOON_IST, NOON_IST + 5 * 60_000, 90);
     expect(governor.learnedPerMin(NOON_IST + 5 * 60_000)).toBe(35);
   });
 
   it('never climbs past maxPerMin', () => {
     const { governor } = rig(adaptive({ maxPerMin: 33 }));
     governor.learnedPerMin(NOON_IST); // starts the clock
-    governor.recordRequest(NOON_IST + 1_000);
-    expect(governor.learnedPerMin(NOON_IST + 24 * 3600_000)).toBe(33);
+    const end = NOON_IST + 24 * 3600_000;
+    saturate(governor, end - 15 * 60_000, end, 60);
+    expect(governor.learnedPerMin(end)).toBe(33);
   });
 
   // The 3 Sep 2026 incident: the controller recovered 8 → 16/min DURING a
@@ -159,10 +172,16 @@ describe('adaptive rate control', () => {
     expect(governor.learnedPerMin(NOON_IST)).toBe(30);
     // An hour with no requests at all — a paused catalogue, an empty queue.
     expect(governor.learnedPerMin(NOON_IST + 3600_000)).toBe(30);
-    // Traffic resumes: the climb restarts from here rather than cashing in the
-    // idle hour as sixty clean intervals.
-    governor.recordRequest(NOON_IST + 3600_000 + 1_000);
-    expect(governor.learnedPerMin(NOON_IST + 3600_000 + 120_000)).toBe(32);
+    // Traffic resumes. Two minutes of it does not restart the climb: the idle
+    // hour is not banked as credit, AND a burst on resume is not mistaken for
+    // sustained demand — which is exactly the moment the connection is most
+    // likely to be under suspicion.
+    const resume = NOON_IST + 3600_000;
+    saturate(governor, resume, resume + 120_000, 30);
+    expect(governor.learnedPerMin(resume + 120_000)).toBe(30);
+    // Sustained load over the full demand window does earn it.
+    saturate(governor, resume + 120_000, resume + 15 * 60_000, 60);
+    expect(governor.learnedPerMin(resume + 15 * 60_000)).toBeGreaterThan(30);
   });
 
   it('halves on a hard block, immediately — not at a threshold', () => {
@@ -181,6 +200,25 @@ describe('adaptive rate control', () => {
     let now = NOON_IST;
     for (let i = 0; i < 12; i++) governor.recordHardBlock((now += 1_000));
     expect(governor.learnedPerMin(now + 1_000)).toBe(5);
+  });
+
+  // 6 Sep 2026: the ceiling drifted to 90/min against ~10/min of real demand,
+  // then the window ended in a 16-block burst and a three-hour pause. Capacity
+  // the catalogue cannot use is not worth the probe that finds it.
+  it('stops climbing once it already has headroom over real demand', () => {
+    const { governor } = rig(adaptive({ startPerMin: 30, maxPerMin: 90 }));
+    expect(governor.learnedPerMin(NOON_IST)).toBe(30);
+    // Half an hour of steady traffic well below the ceiling.
+    saturate(governor, NOON_IST, NOON_IST + 30 * 60_000, 5);
+    expect(governor.learnedPerMin(NOON_IST + 30 * 60_000)).toBe(30);
+  });
+
+  it('still climbs for a connection that is using what it has', () => {
+    const { governor } = rig(adaptive({ startPerMin: 30, maxPerMin: 90 }));
+    expect(governor.learnedPerMin(NOON_IST)).toBe(30);
+    // Demand at the ceiling: more headroom is genuinely useful here.
+    saturate(governor, NOON_IST, NOON_IST + 15 * 60_000, 60);
+    expect(governor.learnedPerMin(NOON_IST + 15 * 60_000)).toBeGreaterThan(30);
   });
 
   it('does NOT pause globally while cutting the rate is still working', () => {
