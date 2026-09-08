@@ -221,6 +221,47 @@ describe('adaptive rate control', () => {
     expect(governor.learnedPerMin(NOON_IST + 15 * 60_000)).toBeGreaterThan(30);
   });
 
+  // 8 Sep 2026: four of five global pauses fired at 5.5–8.6% blocked while
+  // tolerateBlockRatio was 0.05 — the controller would not even have cut at
+  // that ratio. They cost 300 minutes of uptime between them.
+  it('does NOT pause at a block ratio the controller itself tolerates', () => {
+    const { governor } = rig(
+      adaptive({ startPerMin: 8, maxPerMin: 8, minPerMin: 3, tolerateBlockRatio: 0.05 }),
+    );
+    // Drive the ceiling to its floor with blocks spaced far enough apart that
+    // the count thresholds never trip during setup.
+    let now = NOON_IST;
+    for (let i = 0; i < 3; i++) governor.recordHardBlock((now += 35 * 60_000));
+    expect(governor.learnedPerMin(now)).toBe(3);
+    now += 20 * 60_000; // let those blocks leave the ratio window
+
+    // A working connection: 40 requests in the window, 3 of them refused.
+    saturate(governor, now, now + 10 * 60_000, 4);
+    now += 10 * 60_000;
+    for (let i = 0; i < 3; i++) governor.recordHardBlock((now += 1_000));
+
+    // 3/40 is 7.5% — above the absolute count thresholds, below twice the
+    // ratio the controller absorbs without reacting. Stopping everything for
+    // 40 minutes over that is not a proportional response.
+    expect(governor.canRequest(now).allowed).toBe(true);
+  });
+
+  it('DOES pause once the block ratio is genuinely bad and the rate is at the floor', () => {
+    const { governor } = rig(
+      adaptive({ startPerMin: 8, maxPerMin: 8, minPerMin: 3, tolerateBlockRatio: 0.05 }),
+    );
+    let now = NOON_IST;
+    for (let i = 0; i < 3; i++) governor.recordHardBlock((now += 35 * 60_000));
+    now += 20 * 60_000;
+    saturate(governor, now, now + 10 * 60_000, 4);
+    now += 10 * 60_000;
+    // 8 of 40 is 20% — four times what the controller tolerates, and slowing
+    // down has already stopped working.
+    for (let i = 0; i < 8; i++) governor.recordHardBlock((now += 1_000));
+
+    expect(governor.canRequest(now).reason).toBe('backoff');
+  });
+
   it('does NOT pause globally while cutting the rate is still working', () => {
     const { governor } = rig(adaptive());
     // Two blocks in 15 minutes would pause a fixed-mode governor outright. Here

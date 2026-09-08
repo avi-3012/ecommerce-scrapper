@@ -30,6 +30,17 @@ export const CONGESTION_RATIO_THRESHOLD = 0.15;
 /** A clean stretch this long forgets the backoff level. */
 export const BACKOFF_DECAY_MS = 6 * 3600_000;
 
+/**
+ * How much worse than the controller's own tolerance the block ratio must be
+ * before the GLOBAL pause fires, in adaptive mode.
+ *
+ * A rate cut is a proportional response; stopping every request for up to three
+ * hours is not. Reserving the pause for twice the ratio the controller will
+ * absorb without reacting keeps a heavy response from firing on evidence that
+ * the light response considers unremarkable.
+ */
+const PAUSE_RATIO_MULTIPLE = 2;
+
 /** Width of one usage bucket. Twelve of these cover the reported hour. */
 export const USAGE_BUCKET_MS = 5 * 60_000;
 
@@ -453,6 +464,24 @@ export class IpGovernor {
       const atFloor =
         (this.state.adaptivePerMin ?? 0) <= this.config.ipCap.adaptive.minPerMin + 0.001;
       if (!atFloor) {
+        this.persist();
+        return null;
+      }
+      // Being at the floor is not on its own a reason to stop. `burst` and
+      // `hourly` are ABSOLUTE counts, calibrated when this connection ran at
+      // tens of requests a minute; at 2.75/min three blocks in an hour is a 1–2%
+      // block rate, which is a healthy connection, not a refused one.
+      //
+      // So the pause has to agree with the controller that something is wrong.
+      // The controller tolerates `tolerateBlockRatio` without even cutting, and
+      // stopping everything is a far heavier response than a cut — it costs
+      // 100% of throughput for up to three hours. Requiring twice that ratio
+      // keeps the two mechanisms from contradicting each other, which on
+      // 8 Sep 2026 they did: four of five pauses fired at 5.5–8.6% blocked
+      // while `tolerateBlockRatio` was 0.05, costing 300 minutes of uptime for
+      // block rates the controller considered acceptable.
+      const ratio = this.recentBlockRatio(now);
+      if (ratio < this.config.ipCap.adaptive.tolerateBlockRatio * PAUSE_RATIO_MULTIPLE) {
         this.persist();
         return null;
       }
