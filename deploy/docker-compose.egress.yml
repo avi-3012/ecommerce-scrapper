@@ -1,0 +1,31 @@
+# Multiple source IPs for the worker — layered ON TOP of docker-compose.aws.yml.
+#
+#   docker compose --env-file deploy/.env.aws \
+#     -f deploy/docker-compose.aws.yml \
+#     -f deploy/docker-compose.egress.yml up -d --build
+#
+# Kept as a separate file rather than commented lines in the base compose so
+# that turning it on is adding a `-f`, not editing a tracked file by hand. The
+# indentation of a commented block is not the same as the indentation of live
+# YAML, and uncommenting one is a reliable way to produce a parse error at the
+# exact moment you are trying to change something else.
+#
+# Drop the second `-f` to go back to a single address; nothing else changes.
+#
+# See docs/EGRESS-IPS.md for the addresses this needs on the host first.
+services:
+  worker:
+    # The worker must share the host's network namespace. On the bridge network
+    # a container holds only its own address, so binding a request to one of the
+    # host's addresses — which is what `egress` does — fails outright.
+    network_mode: host
+    # Host networking removes the compose network, and with it the `db`
+    # hostname. Postgres already publishes on 127.0.0.1:5432, so the worker
+    # reaches it over loopback instead.
+    #
+    # The credentials are the same three variables the db service interpolates
+    # from --env-file, so there is no second copy of the password to keep in
+    # step and none of it is written into a tracked file. `environment` takes
+    # precedence over `env_file`, so only DATABASE_URL is overridden.
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@127.0.0.1:5432/${POSTGRES_DB}

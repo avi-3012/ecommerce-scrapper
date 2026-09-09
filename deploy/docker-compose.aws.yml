@@ -96,22 +96,10 @@ services:
     <<: *app
     command: node apps/worker/dist/main.js
     # ── Multiple source IPs ────────────────────────────────────────────────
-    # To send from several addresses (config `egress`), the worker must share
-    # the host's network namespace — on the bridge network it holds only its
-    # own container address, so binding to a host address fails. Uncomment
-    # ALL THREE lines together: host networking removes the `db` hostname, so
-    # the worker needs a loopback connection string of its own.
+    # Layer deploy/docker-compose.egress.yml on top of this file with a second
+    # `-f`; it puts the worker on the host network so `egress` addresses can be
+    # bound. See docs/EGRESS-IPS.md.
     #
-    # The credentials come from the same variables the db service uses, so
-    # there is no second copy of the password to keep in step — and none of it
-    # is written into this tracked file. `environment` overrides the
-    # DATABASE_URL that env_file supplies.
-    #
-    #   network_mode: host
-    #   environment:
-    #     DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@127.0.0.1:5432/${POSTGRES_DB}
-    #
-    # See docs/EGRESS-IPS.md for the full procedure.
     # The largest allocation: 48 identities, up to 10 concurrent fetches, and a
     # Chromium browser tier that can hold a couple of persistent profiles open.
     mem_limit: 1792m

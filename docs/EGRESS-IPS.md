@@ -213,33 +213,33 @@ worker's container holds only its own address (`172.17.x.x`); binding to
 `172.31.x.x` fails because the container does not have it. The worker has to
 share the host's network namespace to bind the host's addresses.
 
-Add to the `worker` service in `deploy/docker-compose.aws.yml`:
+That is what `deploy/docker-compose.egress.yml` does. Layer it on with a second
+`-f` — there is nothing to edit:
 
-```yaml
-  worker:
-    <<: *app
-    network_mode: host
+```bash
+docker compose --env-file deploy/.env.aws \
+  -f deploy/docker-compose.aws.yml \
+  -f deploy/docker-compose.egress.yml up -d --build
 ```
 
-That removes the worker from the compose network, so **the `db` hostname stops
-resolving for it**. Postgres already publishes on `127.0.0.1:5432`, so give the
-worker its own connection string. In `deploy/.env.aws`, keep `DATABASE_URL`
-pointing at `db:5432` for the api and migrate services, and override it for the
-worker only:
+It sets `network_mode: host` and, because host networking removes the compose
+network and with it the `db` hostname, points the worker at Postgres over
+loopback:
 
 ```yaml
+services:
   worker:
-    <<: *app
     network_mode: host
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@127.0.0.1:5432/${POSTGRES_DB}
 ```
 
-Those are the same variables the `db` service already interpolates from
-`--env-file deploy/.env.aws`, so there is no second copy of the password to
-keep in step and no secret written into a tracked file. `environment` takes
-precedence over `env_file`, so only `DATABASE_URL` is overridden and every
-other setting still comes from `.env.aws`.
+Those are the same three variables the `db` service already interpolates from
+`--env-file`, so there is no second copy of the password to keep in step and no
+secret in a tracked file. `environment` takes precedence over `env_file`, so
+only `DATABASE_URL` is overridden.
+
+Drop the second `-f` to go back to a single address.
 
 Host networking also means the worker no longer needs `depends_on` health
 gating through the compose network; leave the `depends_on` entries as they are,
