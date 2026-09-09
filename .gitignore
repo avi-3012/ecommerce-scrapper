@@ -33,4 +33,10 @@ pricepulse-*.csv
 # particular are session material.
 data/
 
+# Host-specific scraping config. `egress` lists the private IPs THIS machine
+# holds, which differ per instance, so it cannot live in a tracked file without
+# every deploy fighting git pull. Copy config/scraping.aws.json to
+# config/scraping.local.json, edit that, and point SCRAPING_CONFIG at it.
+config/*.local.json
+
 # prisma generated client lives in node_modules; nothing extra to ignore

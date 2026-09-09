@@ -176,9 +176,29 @@ before going further.
 Put the **private** addresses in the config — those are what the host holds and
 what `localAddress` binds to. The Elastic IP is what Amazon sees.
 
-```json
-"egress": ["172.31.20.11", "172.31.20.12", "172.31.20.13", "172.31.20.14", "172.31.20.15"]
+These addresses exist only on this machine, so keep them out of the tracked
+config or every `git pull` will conflict with the running deployment:
+
+```bash
+cp config/scraping.aws.json config/scraping.local.json     # gitignored
 ```
+
+Edit `config/scraping.local.json`:
+
+```json
+"egress": ["172.31.0.211", "172.31.0.212", "172.31.0.213", "172.31.0.214"]
+```
+
+and point the worker at it in `deploy/.env.aws`:
+
+```
+SCRAPING_CONFIG=/repo/config/scraping.local.json
+```
+
+Leave the instance's PRIMARY private address out of the list. It carries the
+inbound dashboard traffic and whatever block history the connection has already
+accumulated, and keeping it separate means a burnt egress address can be
+replaced without changing the address you reach the app on.
 
 The worker mounts `config/` read-only, so this needs only a restart:
 
