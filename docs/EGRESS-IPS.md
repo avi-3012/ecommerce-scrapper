@@ -49,6 +49,18 @@ Nothing here needs a new instance. You are adding addresses to the one you have.
 
 Five addresses, in the same region as the instance:
 
+The AWS CLI is not installed on the instance by default, and installing it
+there would mean putting credentials on the scraper host. For a one-time setup
+the **Console** is simpler and leaves no credentials behind — steps 1 to 3 are
+all point-and-click. Use the CLI only if you already run it somewhere with
+credentials (your laptop), or attach an IAM role to the instance first.
+
+**Console:** EC2 → *Elastic IPs* → **Allocate Elastic IP address** → Allocate.
+Repeat five times, tagging each `Name=pricepulse-egress` so they are
+identifiable later.
+
+**CLI**, from a machine that already has credentials:
+
 ```bash
 for i in 1 2 3 4 5; do
   aws ec2 allocate-address --domain vpc \
@@ -66,6 +78,12 @@ Each Elastic IP has to associate with a private IP on the instance's network
 interface. Find the interface, then add four more private addresses (you already
 have one):
 
+**Console:** EC2 → *Instances* → your instance → *Networking* tab → click the
+network interface → **Actions → Manage IP addresses** → expand the interface →
+**Assign new IP address** ×4 → Save.
+
+**CLI:**
+
 ```bash
 ENI=$(aws ec2 describe-instances --instance-ids <instance-id> \
   --query 'Reservations[0].Instances[0].NetworkInterfaces[0].NetworkInterfaceId' --output text)
@@ -77,6 +95,12 @@ Instance-type limits apply — a `t3.medium` allows 6 IPv4 per interface, which 
 enough for five.
 
 ### 3. Associate each Elastic IP with one private IP
+
+**Console:** EC2 → *Elastic IPs* → select one → **Actions → Associate Elastic
+IP address** → Resource type *Network interface* → pick the interface → choose a
+**private IP** → Associate. Repeat for each, pairing one EIP to one private IP.
+
+**CLI:**
 
 ```bash
 aws ec2 associate-address --allocation-id <eipalloc-…> \
@@ -94,11 +118,41 @@ Confirm what the host actually holds:
 ip addr show
 ```
 
-If only the primary appears, add the others (substituting your interface name
-and CIDR), and make it survive reboot via your distribution's network config:
+Ubuntu's cloud images do **not** pick up secondary private IPs — cloud-init
+configures only the primary from DHCP, so EC2 knows about the other four and the
+kernel does not. Find your interface name and prefix length first; they vary by
+instance type and are not always `ens5`:
 
 ```bash
-sudo ip addr add <private-ip>/20 dev ens5
+ip -4 addr show          # e.g. "inet 172.31.0.210/20 ... enp39s0"
+```
+
+Add the rest immediately, so you can test now:
+
+```bash
+sudo ip addr add 172.31.0.211/20 dev enp39s0
+sudo ip addr add 172.31.0.212/20 dev enp39s0   # …and so on
+```
+
+Then make it survive a reboot. On Ubuntu 24.04 that means netplan — create
+`/etc/netplan/60-egress.yaml` (a separate file, so cloud-init's own
+`50-cloud-init.yaml` is left alone and regenerating it cannot wipe this):
+
+```yaml
+network:
+  version: 2
+  ethernets:
+    enp39s0:
+      addresses:
+        - 172.31.0.211/20
+        - 172.31.0.212/20
+        - 172.31.0.213/20
+        - 172.31.0.214/20
+```
+
+```bash
+sudo chmod 600 /etc/netplan/60-egress.yaml   # netplan warns loudly otherwise
+sudo netplan apply
 ```
 
 **This step is the one people skip.** `localAddress` binds to an address the
