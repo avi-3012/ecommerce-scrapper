@@ -269,7 +269,6 @@ export class IdentityService implements OnModuleInit, OnModuleDestroy {
   banner(productCount: number, effectiveCycleMin: number): string[] {
     const { config } = this;
     const identities = this.pool.list();
-    const cycleMid = (config.cycle.minSec + config.cycle.maxSec) / 2 / 60;
     const ratePerMin = this.capPerMinTotal();
     return [
       '─── PricePulse scraping ───────────────────────────────',
@@ -292,8 +291,13 @@ export class IdentityService implements OnModuleInit, OnModuleDestroy {
       `  products        ${productCount}`,
       `  cycle           requested ${config.cycle.minSec}–${config.cycle.maxSec}s, ` +
         `effective ${effectiveCycleMin.toFixed(1)} min`,
+      // Against the EFFECTIVE cycle, not the requested one. Quoting the
+      // requested cycle understates capacity by exactly the factor the cycle
+      // has stretched — a banner reading "≈ 12" while 50 products are being
+      // checked is the kind of wrong that costs someone an hour.
       `  capacity        maxProducts ≈ perMin × cycleMinutes = ` +
-        `${ratePerMin.toFixed(0)} × ${cycleMid.toFixed(1)} ≈ ${maxProductsFor(ratePerMin, cycleMid)}` +
+        `${ratePerMin.toFixed(0)} × ${effectiveCycleMin.toFixed(1)} ≈ ` +
+        `${maxProductsFor(ratePerMin, effectiveCycleMin)}` +
         (config.ipCap.mode === 'adaptive' ? ' (moves as the rate is learned)' : ''),
       `  store           ${this.store.dir}`,
       '───────────────────────────────────────────────────────',

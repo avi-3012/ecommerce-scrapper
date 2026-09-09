@@ -45,9 +45,26 @@ async function checkCapacity(force: boolean): Promise<void> {
 
   const prisma = new PrismaClient();
   try {
-    const productCount = await prisma.product.count({ where: { status: 'active' } });
+    // What will actually be SCRAPED, and what the whole connection will spend.
+    //
+    // Both inputs used to be wrong once capacity and multiple egress addresses
+    // existed: the count was every active product rather than the top
+    // `capacity` of them, and the rate came from a single governor rather than
+    // the sum across addresses. On a 297-product catalogue with capacity 50 and
+    // two addresses that reported "297 products at 3.0/min needs a 99.0 min
+    // cycle" for work the scheduler correctly plans as 50 at 12/min over 4.2
+    // minutes — a refusal-to-start threshold computed from numbers that
+    // describe nothing the worker does.
+    const active = await prisma.product.count({ where: { status: 'active' } });
+    const capacity = config.limits.capacity;
+    const productCount = capacity > 0 ? Math.min(active, capacity) : active;
     if (productCount === 0) return;
-    const capPerMin = new IpGovernor(config, new IdentityStore(defaultStoreDir())).capPerMin();
+    const store = new IdentityStore(defaultStoreDir());
+    const addresses = config.egress.length ? config.egress : [undefined];
+    const capPerMin = addresses.reduce(
+      (total, ip) => total + new IpGovernor(config, store, () => {}, ip).capPerMin(),
+      0,
+    );
     const plan = planCycle({
       fetchCount: productCount,
       capPerMin,
