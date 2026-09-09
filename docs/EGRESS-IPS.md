@@ -232,8 +232,14 @@ worker only:
     <<: *app
     network_mode: host
     environment:
-      DATABASE_URL: postgresql://pricepulse:<password>@127.0.0.1:5432/pricepulse
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@127.0.0.1:5432/${POSTGRES_DB}
 ```
+
+Those are the same variables the `db` service already interpolates from
+`--env-file deploy/.env.aws`, so there is no second copy of the password to
+keep in step and no secret written into a tracked file. `environment` takes
+precedence over `env_file`, so only `DATABASE_URL` is overridden and every
+other setting still comes from `.env.aws`.
 
 Host networking also means the worker no longer needs `depends_on` health
 gating through the compose network; leave the `depends_on` entries as they are,
