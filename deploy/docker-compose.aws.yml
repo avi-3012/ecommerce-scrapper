@@ -95,6 +95,18 @@ services:
   worker:
     <<: *app
     command: node apps/worker/dist/main.js
+    # ── Multiple source IPs ────────────────────────────────────────────────
+    # To send from several addresses (config `egress`), the worker must share
+    # the host's network namespace — on the bridge network it holds only its
+    # own container address and binding to a host address fails. Uncomment
+    # BOTH lines together: host networking removes the `db` hostname, so the
+    # worker needs a loopback connection string of its own.
+    #
+    #   network_mode: host
+    #   environment:
+    #     DATABASE_URL: postgresql://USER:PASSWORD@127.0.0.1:5432/pricepulse
+    #
+    # See docs/EGRESS-IPS.md for the full procedure.
     # The largest allocation: 48 identities, up to 10 concurrent fetches, and a
     # Chromium browser tier that can hold a couple of persistent profiles open.
     mem_limit: 1792m

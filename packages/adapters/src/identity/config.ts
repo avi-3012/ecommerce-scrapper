@@ -1,3 +1,4 @@
+import { isIP } from 'node:net';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { CapMode, ConnectionType, RotationMode, ScrapingConfig } from './types.js';
@@ -45,6 +46,7 @@ export const DEFAULT_SCRAPING_CONFIG: ScrapingConfig = {
   maxConcurrent: 2,
   diurnal: { enabled: true },
   tiers: { warmAfterHours: 6, coldAfterHours: 72, warmMultiplier: 4, coldMultiplier: 15 },
+  egress: [],
   limits: { capacity: 0, maxProducts: 0, refuseWhenStretched: true },
 };
 
@@ -138,6 +140,7 @@ export function mergeConfig(raw: unknown): ScrapingConfig {
       warmMultiplier: num(tiers.warmMultiplier, d.tiers.warmMultiplier, 1, 200),
       coldMultiplier: num(tiers.coldMultiplier, d.tiers.coldMultiplier, 1, 500),
     },
+    egress: parseEgress((raw as { egress?: unknown } | null)?.egress, d.egress),
     limits: {
       capacity: int(limits.capacity, d.limits.capacity, 0, 100_000),
       maxProducts: int(limits.maxProducts, d.limits.maxProducts, 0, 100_000),
@@ -276,6 +279,32 @@ function num(value: unknown, fallback: number, min: number, max: number): number
 
 function int(value: unknown, fallback: number, min: number, max: number): number {
   return Math.round(num(value, fallback, min, max));
+}
+
+/**
+ * Source addresses, validated as literal IPv4/IPv6 rather than hostnames: this
+ * value is handed to the socket layer as `localAddress`, which binds to an
+ * address the host already has. A name that has to be resolved is always a
+ * configuration mistake here, and it fails at connect time with an error that
+ * says nothing about the cause.
+ */
+function parseEgress(value: unknown, fallback: string[]): string[] {
+  if (value === undefined || value === null) return fallback;
+  if (!Array.isArray(value)) throw new Error('egress must be an array of IP addresses');
+  const out: string[] = [];
+  for (const entry of value) {
+    const ip = String(entry).trim();
+    if (!ip) continue;
+    if (!isIP(ip)) {
+      throw new Error(
+        `egress entry ${JSON.stringify(ip)} is not an IP address. ` +
+          `Use the addresses configured on this host, not hostnames.`,
+      );
+    }
+    if (out.includes(ip)) throw new Error(`egress entry ${ip} is listed twice`);
+    out.push(ip);
+  }
+  return out;
 }
 
 function bool(value: unknown, fallback: boolean): boolean {

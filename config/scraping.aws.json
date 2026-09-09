@@ -70,6 +70,27 @@
       "tolerateBlockRatio": 0.05
     }
   },
+  "$comment_egress": [
+    "Source IP addresses to send from. Empty = the host's default route.",
+    "",
+    "Each address gets its OWN budget, backoff and adaptive controller, because",
+    "the far end decides per address. Measured on this connection: 2.75 req/min",
+    "from one address gave a 0.57% block rate, while 12/min gave 28 blocks in an",
+    "hour. So the per-address budget is roughly 3/min, and 50 products at a",
+    "5-minute interval needs ~11 req/min -> four to five addresses.",
+    "",
+    "Identities are pinned to an address for life: a persona appearing on two",
+    "addresses is a signal no real browser produces.",
+    "",
+    "These must be addresses this host actually holds (ip addr show). They are",
+    "passed to the socket as localAddress; a name or an address the host does",
+    "not own fails at connect time.",
+    "",
+    "UNVERIFIED for AWS: five Elastic IPs may or may not be counted separately by",
+    "Amazon, which could aggregate by subnet or ASN. Prove it with two addresses",
+    "before paying for five -- see docs/EGRESS-IPS.md."
+  ],
+  "egress": [],
   "night": {
     "$comment": "Unused while diurnal.enabled is false.",
     "startIST": "00:00",

@@ -68,23 +68,25 @@ describe('HeartbeatService', () => {
  */
 function identityStub(): never {
   return {
-    governor: {
-      snapshot: () => ({
-        capPerMin: 0,
-        learnedPerMin: 0,
-        mode: 'fixed',
-        diurnalFactor: 1,
-        usedLastMinute: 0,
-        usedLastHour: 0,
-        recentBlockRatio: 0,
-        recentCongestionRatio: 0,
-        unreadable: 0,
-        backoffLevel: 0,
-        pausedUntil: null,
-        isNight: false,
-      }),
-      killSwitchEngaged: () => false,
-    },
+    // Vitals are merged across every egress address by IdentityService, so the
+    // heartbeat asks it rather than any single governor.
+    vitals: () => ({
+      capPerMin: 0,
+      learnedPerMin: 0,
+      mode: 'fixed',
+      diurnalFactor: 1,
+      usedLastMinute: 0,
+      usedLastHour: 0,
+      recentBlockRatio: 0,
+      recentCongestionRatio: 0,
+      unreadable: 0,
+      backoffLevel: 0,
+      pausedUntil: null,
+      isNight: false,
+      egressCount: 1,
+      egressPaused: 0,
+    }),
+    defaultGovernor: { killSwitchEngaged: () => false },
     pool: { list: () => [] },
   } as never;
 }

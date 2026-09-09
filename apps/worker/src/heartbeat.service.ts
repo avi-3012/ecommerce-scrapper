@@ -39,7 +39,7 @@ export class HeartbeatService implements OnModuleInit, OnModuleDestroy {
       // mid-cycle, in-flight fetches wait it out and the cycle cannot finish, so
       // cycle-end publishing meant the dashboard showed numbers from before the
       // incident and reported "not paused" while fetching was paused for hours.
-      const snapshot = this.identities.governor.snapshot(now.getTime());
+      const snapshot = this.identities.vitals(now.getTime());
       const pool = this.identities.pool.list();
       await this.prisma.systemStatus.upsert({
         where: { id: 1 },
@@ -57,11 +57,16 @@ export class HeartbeatService implements OnModuleInit, OnModuleDestroy {
             usedLastHour: snapshot.usedLastHour,
             blockRatio: Math.round(snapshot.recentBlockRatio * 1000) / 10,
             congestionRatio: Math.round(snapshot.recentCongestionRatio * 1000) / 10,
-            unreadable: snapshot.unreadable ?? 0,
+            unreadable: snapshot.unreadable,
             backoffLevel: snapshot.backoffLevel,
             pausedUntil: snapshot.pausedUntil,
             isNight: snapshot.isNight,
-            killSwitch: this.identities.governor.killSwitchEngaged(),
+            killSwitch: this.identities.defaultGovernor.killSwitchEngaged(),
+            // How many source addresses there are, and how many are stopped.
+            // With one paused out of five the system is at 80% capacity, which
+            // reads very differently from the outage a bare "paused" implies.
+            egressCount: snapshot.egressCount,
+            egressPaused: snapshot.egressPaused,
           },
         },
         create: { id: 1, workerHeartbeatAt: now },

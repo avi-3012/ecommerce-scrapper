@@ -191,8 +191,14 @@ export class IpGovernor {
     private readonly store: IdentityStore,
     /** Called on ERROR-level events (global pause) so the existing alert path fires. */
     private readonly onAlert: (alert: GovernorAlert) => void = () => {},
+    /**
+     * The source address this governor accounts for. Each egress carries its
+     * own budget, backoff and controller, because the far end decides per
+     * address — so one address being refused must not silence the rest.
+     */
+    readonly egressId?: string,
   ) {
-    this.state = { ...emptyState(), ...(store.loadGovernor<GovernorState>() ?? {}) };
+    this.state = { ...emptyState(), ...(store.loadGovernor<GovernorState>(egressId) ?? {}) };
     this.state.blocks ??= [];
     this.state.requests ??= [];
     this.state.usageBuckets ??= [];
@@ -210,7 +216,7 @@ export class IpGovernor {
    * an IP gets flagged.
    */
   private reload(): void {
-    const stored = this.store.loadGovernor<GovernorState>();
+    const stored = this.store.loadGovernor<GovernorState>(this.egressId);
     if (!stored) return;
     this.state = {
       ...emptyState(),
@@ -623,7 +629,7 @@ export class IpGovernor {
   }
 
   private persist(): void {
-    this.store.saveGovernor(this.state);
+    this.store.saveGovernor(this.state, this.egressId);
   }
 
   /** Test seam: replace the whole state. */

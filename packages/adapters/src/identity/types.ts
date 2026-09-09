@@ -47,6 +47,15 @@ export interface Identity {
    * wire order, so this object is never rebuilt, spread, or sorted — only read.
    */
   headers: Record<string, string>;
+  /**
+   * Which source address this identity leaves from, or undefined for the host's
+   * default route.
+   *
+   * Bound once at creation and never changed, for the same reason the headers
+   * are: a persona that appears on several addresses is a signal no real
+   * browser produces. One identity, one address, for its whole life.
+   */
+  egressId?: string;
   /** Minimum gap between this identity's requests; randomized once, 60–150 s. */
   minGapMs: number;
   state: IdentityState;
@@ -149,6 +158,19 @@ export interface ScrapingConfig {
    * and the controller takes over from there.
    */
   ipCap: { mode: CapMode; dayPerMin: number; nightPerMin: number; adaptive: AdaptiveCapConfig };
+  /**
+   * Source IP addresses to send from, as configured on this host. Empty means
+   * "use the default route", which is the single-IP behaviour.
+   *
+   * Every entry gets its OWN request budget, backoff state and adaptive
+   * controller. That is the point: the block decision is made per address, so
+   * one address being refused must not silence the others. Under a single
+   * shared budget one bad minute cost 100% of throughput for up to three hours;
+   * across five addresses it costs a fifth.
+   *
+   * Identities are distributed across them round-robin at creation and stay put.
+   */
+  egress: string[];
   night: { startIST: string; endIST: string };
   noiseRatio: number;
   /**

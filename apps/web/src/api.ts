@@ -206,8 +206,13 @@ export interface ScraperHealth {
   /** Responses received but not parseable — usually our bug, not theirs. */
   unreadable: number;
   backoffLevel: number;
+  /** Set only when EVERY egress address is stopped; anything less is partial capacity. */
   pausedUntil: number | null;
   isNight: boolean;
+  /** How many source addresses are configured. Absent on pre-upgrade rows. */
+  egressCount?: number;
+  /** How many of those are currently backed off. */
+  egressPaused?: number;
 }
 
 /** Per-product bandwidth (wire/compressed bytes) over a window. */

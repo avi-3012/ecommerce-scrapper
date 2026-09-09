@@ -56,6 +56,7 @@
       "tolerateBlockRatio": 0.02
     }
   },
+  "egress": [],
   "night": {
     "$comment": "IST hours during which the night ratio applies and the pool thins out.",
     "startIST": "00:00",

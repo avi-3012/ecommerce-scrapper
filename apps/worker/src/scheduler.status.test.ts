@@ -28,13 +28,13 @@ function rig(options: { due: Array<{ id: string }>; gate?: string }) {
   const identities = {
     pool: { ensureSize: vi.fn() },
     config: { cycle: { minSec: 55, maxSec: 65 }, limits: { capacity: 0 } },
-    governor: {
-      canRequest: () =>
-        options.gate
-          ? { allowed: false, reason: options.gate, retryAfterMs: 1_000 }
-          : { allowed: true, reason: null, retryAfterMs: 0 },
-      capPerMin: () => 30,
-    },
+    // The scheduler asks the SERVICE, not a governor: with several egress
+    // addresses the budget is their sum and the gate opens if any one of them
+    // can still send.
+    gate: () =>
+      options.gate ? { allowed: false, reason: options.gate } : { allowed: true, reason: null },
+    capPerMinTotal: () => 30,
+    defaultGovernor: { killSwitchEngaged: () => false },
     banner: () => [],
   } as unknown as IdentityService;
 

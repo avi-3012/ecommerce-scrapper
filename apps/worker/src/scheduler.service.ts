@@ -81,7 +81,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       if (settings.monitoringPaused) return;
 
       // The kill switch outranks everything, including a cycle already planned.
-      if (this.identities.governor.killSwitchEngaged()) {
+      if (this.identities.defaultGovernor.killSwitchEngaged()) {
         console.log('[identity] PAUSE engaged — no fetching this cycle');
         this.cycleEndsAt = Date.now() + IDLE_TICK_MS;
         return;
@@ -119,7 +119,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     // Only `backoff` and `kill_switch` skip. `cap` means the minute's budget is
     // momentarily full, which is the normal steady state the planner exists to
     // spread work across — skipping on that would stall the loop at capacity.
-    const gate = this.identities.governor.canRequest();
+    const gate = this.identities.gate();
     if (!gate.allowed && (gate.reason === 'backoff' || gate.reason === 'kill_switch')) {
       if (this.lastGateReason !== gate.reason) {
         console.warn(
@@ -137,7 +137,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     }
     this.lastGateReason = '';
 
-    const capPerMin = this.identities.governor.capPerMin();
+    const capPerMin = this.identities.capPerMinTotal();
     const due = await this.dueProducts(config.cycle.maxSec * 1_000);
 
     // Noise rides ALONG with the products rather than being extra traffic: a

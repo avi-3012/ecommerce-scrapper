@@ -213,7 +213,14 @@ export class IdentitySession {
   private get agent(): { http2: Http2Agent } {
     IdentitySession.agents.set(
       this.identity.id,
-      IdentitySession.agents.get(this.identity.id) ?? new Http2Agent({ timeout: H2_IDLE_MS }),
+      IdentitySession.agents.get(this.identity.id) ??
+        new Http2Agent({
+          timeout: H2_IDLE_MS,
+          // Bind the socket to this identity's own source address. The agent is
+          // per-identity and an identity's address never changes, so every
+          // connection it opens leaves from the same place for its whole life.
+          ...(this.identity.egressId ? { localAddress: this.identity.egressId } : {}),
+        }),
     );
     return { http2: IdentitySession.agents.get(this.identity.id)! };
   }
@@ -371,6 +378,11 @@ export class IdentitySession {
           // No retries from got: a 403 or a CAPTCHA must reach the classifier
           // rather than be quietly re-issued against the same flagged IP. The
           // transport retry below is a different thing entirely.
+          // The HTTP/1.1 fallback path has no agent of ours, so the source
+          // address has to be set on the request itself or that retry would
+          // silently leave from the default route — a different IP presenting
+          // the same identity, which is the one thing this must never do.
+          ...(this.identity.egressId ? { localAddress: this.identity.egressId } : {}),
           retry: { limit: 0 },
           throwHttpErrors: false,
           followRedirect: options.followRedirect ?? true,

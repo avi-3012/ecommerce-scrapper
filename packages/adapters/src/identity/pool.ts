@@ -72,12 +72,14 @@ export function createIdentity(
   now: number = Date.now(),
   random: () => number = Math.random,
   gapRange: { min: number; max: number } = MIN_GAP_RANGE_MS,
+  egressId?: string,
 ): Identity {
   const identity: Identity = {
     id: ulid(now),
     browser: spec.browser,
     os: spec.os,
     device: spec.device,
+    ...(egressId ? { egressId } : {}),
     headers: generateHeaders(spec),
     minGapMs: randomBetween(gapRange, random),
     state: 'fresh',
@@ -110,6 +112,13 @@ export interface AcquireOptions {
   /** The product this fetch is for, for stickiness. Absent for noise fetches. */
   productId?: string;
   now?: number;
+  /**
+   * Extra eligibility test, applied on top of the pool's own. Used to skip
+   * identities whose egress address is currently paused: handing one out would
+   * only produce a request that is refused at the gate a moment later, while a
+   * usable identity on another address sat idle.
+   */
+  usable?: (identity: Identity) => boolean;
 }
 
 export class IdentityPool {
@@ -167,6 +176,7 @@ export class IdentityPool {
       }
     }
     this.applyChurn(now);
+    this.rebalanceEgress();
     let created = 0;
     while (this.identities.length < this.config.identities.count && created < maxNew) {
       this.identities.push(
@@ -175,6 +185,7 @@ export class IdentityPool {
           now,
           this.random,
           this.config.identities.minGapMs,
+          this.nextEgress(),
         ),
       );
       created++;
@@ -254,7 +265,9 @@ export class IdentityPool {
   acquire(options: AcquireOptions): Identity | null {
     const now = options.now ?? Date.now();
     this.reload();
-    const eligible = this.eligible(now);
+    const eligible = options.usable
+      ? this.eligible(now).filter(options.usable)
+      : this.eligible(now);
     if (eligible.length === 0) return null;
 
     // Per-request rotation: no incumbent, no stickiness. Every fetch goes to the
@@ -388,6 +401,46 @@ export class IdentityPool {
 
   needsWarmUp(identity: Identity, site: string): boolean {
     return !identity.warmedSites.includes(site);
+  }
+
+  /**
+   * The address a new identity should be bound to: whichever configured egress
+   * currently carries the fewest live identities, so the pool stays balanced as
+   * personas retire unevenly. Undefined when no egress is configured, which
+   * leaves the identity on the host's default route.
+   */
+  private nextEgress(): string | undefined {
+    const egress = this.config.egress;
+    if (egress.length === 0) return undefined;
+    const load = new Map(egress.map((ip) => [ip, 0]));
+    for (const identity of this.identities) {
+      const ip = identity.egressId;
+      if (ip !== undefined && load.has(ip)) load.set(ip, load.get(ip)! + 1);
+    }
+    let best = egress[0]!;
+    for (const ip of egress) {
+      if (load.get(ip)! < load.get(best)!) best = ip;
+    }
+    return best;
+  }
+
+  /**
+   * Re-home identities whose address has been removed from the config, and
+   * balance any that never had one. Called from `ensureSize`, so an egress list
+   * edited in config takes effect on the next cycle instead of only as the pool
+   * slowly churns.
+   */
+  private rebalanceEgress(): void {
+    const egress = this.config.egress;
+    if (egress.length === 0) {
+      for (const identity of this.identities) delete identity.egressId;
+      return;
+    }
+    for (const identity of this.identities) {
+      if (identity.egressId === undefined || !egress.includes(identity.egressId)) {
+        identity.egressId = this.nextEgress();
+      }
+    }
   }
 
   retire(identity: Identity, why: string): void {

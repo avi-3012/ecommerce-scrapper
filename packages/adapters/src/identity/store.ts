@@ -139,12 +139,24 @@ export class IdentityStore {
 
   // ── governor state ────────────────────────────────────────────────────────
 
-  loadGovernor<T>(): T | null {
-    return this.readJson<T>(join(this.dir, 'governor.json'));
+  /**
+   * Governor state, one file per egress address.
+   *
+   * Separate files rather than one keyed blob: each governor persists on every
+   * request, and sharing a file would mean five controllers rewriting each
+   * other's accounting under concurrent writes.
+   */
+  private governorPath(egressId?: string): string {
+    if (!egressId) return join(this.dir, 'governor.json');
+    return join(this.dir, `governor-${egressId.replace(/[^0-9a-zA-Z]/g, '_')}.json`);
   }
 
-  saveGovernor(state: unknown): void {
-    this.writeJson(join(this.dir, 'governor.json'), state);
+  loadGovernor<T>(egressId?: string): T | null {
+    return this.readJson<T>(this.governorPath(egressId));
+  }
+
+  saveGovernor(state: unknown, egressId?: string): void {
+    this.writeJson(this.governorPath(egressId), state);
   }
 
   // ── block bodies ──────────────────────────────────────────────────────────

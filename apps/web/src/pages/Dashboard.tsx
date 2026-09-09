@@ -326,6 +326,13 @@ function ScraperPanel({ health }: { health: ScraperHealth }): JSX.Element {
             Fetching is paused until {new Date(pausedUntil!).toLocaleTimeString()} — backing off
             after repeated blocks (level {health.backoffLevel}). It resumes on its own.
           </p>
+        ) : health.egressPaused ? (
+          // Some addresses backed off, not all. Reported as reduced capacity
+          // rather than an outage, because that is what it is.
+          <p className="mt-3 text-sm font-medium text-warning-fg">
+            {health.egressPaused} of {health.egressCount} addresses are backing off after blocks.
+            The rest are still checking, so prices update more slowly until they return.
+          </p>
         ) : (
           <p className="mt-3 text-xs text-fg-muted">
             {health.isNight ? 'Night pacing' : 'Daytime pacing'} · running at{' '}
