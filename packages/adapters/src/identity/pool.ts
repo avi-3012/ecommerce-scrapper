@@ -176,7 +176,7 @@ export class IdentityPool {
       }
     }
     this.applyChurn(now);
-    this.rebalanceEgress();
+    this.rebalanceEgress(Math.min(maxNew, MAX_REFILL_PER_PASS));
     let created = 0;
     while (this.identities.length < this.config.identities.count && created < maxNew) {
       this.identities.push(
@@ -412,16 +412,22 @@ export class IdentityPool {
   private nextEgress(): string | undefined {
     const egress = this.config.egress;
     if (egress.length === 0) return undefined;
-    const load = new Map(egress.map((ip) => [ip, 0]));
-    for (const identity of this.identities) {
-      const ip = identity.egressId;
-      if (ip !== undefined && load.has(ip)) load.set(ip, load.get(ip)! + 1);
-    }
+    const load = this.egressLoad();
     let best = egress[0]!;
     for (const ip of egress) {
       if (load.get(ip)! < load.get(best)!) best = ip;
     }
     return best;
+  }
+
+  /** How many live identities each configured address currently carries. */
+  private egressLoad(): Map<string, number> {
+    const load = new Map(this.config.egress.map((ip) => [ip, 0]));
+    for (const identity of this.identities) {
+      const ip = identity.egressId;
+      if (ip !== undefined && load.has(ip)) load.set(ip, load.get(ip)! + 1);
+    }
+    return load;
   }
 
   /**
@@ -430,16 +436,49 @@ export class IdentityPool {
    * edited in config takes effect on the next cycle instead of only as the pool
    * slowly churns.
    */
-  private rebalanceEgress(): void {
+  private rebalanceEgress(maxMoves: number): void {
     const egress = this.config.egress;
     if (egress.length === 0) {
       for (const identity of this.identities) delete identity.egressId;
       return;
     }
+    // An identity with no address, or one whose address has been removed from
+    // the config, is re-homed directly: there is no address it has been
+    // consistent with, so nothing is broken by giving it one.
     for (const identity of this.identities) {
       if (identity.egressId === undefined || !egress.includes(identity.egressId)) {
         identity.egressId = this.nextEgress();
       }
+    }
+
+    // ADDING an address moves nobody, and that is a silent failure: the new
+    // address sits idle while the budget it carries is counted in the total the
+    // cycle planner spends against. Two addresses added to a pool of 48 already
+    // split across two others left half the allowance stranded on addresses
+    // with no identities to spend it.
+    //
+    // Rebalancing RETIRES rather than reassigns. An identity's address is part
+    // of its fingerprint in the same way its headers are, and a persona seen
+    // from two addresses is a pattern no browser produces — so it has to die
+    // and be reborn elsewhere rather than move. The refill below then creates
+    // the replacements, and `nextEgress` puts them on the emptiest address.
+    //
+    // Bounded per pass so the pool drains onto the new addresses over a few
+    // minutes instead of retiring half the personas at once, which would be a
+    // wave of warm-ups — the exact burst shape that earns a block.
+    const fairShare = Math.floor(this.identities.length / egress.length);
+    for (let moved = 0; moved < maxMoves; moved++) {
+      const load = this.egressLoad();
+      const emptiest = egress.reduce((a, b) => (load.get(a)! <= load.get(b)! ? a : b));
+      const fullest = egress.reduce((a, b) => (load.get(a)! >= load.get(b)! ? a : b));
+      if (load.get(emptiest)! >= fairShare) break;
+      if (load.get(fullest)! - load.get(emptiest)! <= 1) break;
+      const onFullest = this.identities.filter((i) => i.egressId === fullest);
+      if (onFullest.length === 0) break;
+      // Youngest first: the oldest personas carry the most history and are the
+      // most credible, so they are the last ones to spend.
+      const youngest = onFullest.reduce((a, b) => (a.id > b.id ? a : b));
+      this.retire(youngest, `rebalancing onto ${emptiest}`);
     }
   }
 

@@ -28,6 +28,66 @@ function rig(egress: string[], count = 6): { pool: IdentityPool; store: Identity
   return { pool, store };
 }
 
+describe('egress rebalancing', () => {
+  // 12 Sep 2026: two addresses were added to a pool of 48 already split across
+  // two others. Nothing moved, so the new addresses sat at zero requests while
+  // the budget they carried was still counted in the total the cycle planner
+  // spent against — half the allowance stranded, and the interval it was bought
+  // for never achieved.
+  it('drains onto an address added after the pool already exists', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'pp-egress-'));
+    dirs.push(dir);
+    const store = new IdentityStore(dir);
+    const base = {
+      ...DEFAULT_SCRAPING_CONFIG,
+      identities: { ...DEFAULT_SCRAPING_CONFIG.identities, count: 12 },
+    };
+
+    const two = { ...base, egress: ['10.0.0.1', '10.0.0.2'] };
+    new IdentityPool(two, store).ensureSize(Date.now());
+
+    const four = { ...base, egress: ['10.0.0.1', '10.0.0.2', '10.0.0.3', '10.0.0.4'] };
+    const pool = new IdentityPool(four, store);
+
+    const load = (): Record<string, number> => {
+      const counts: Record<string, number> = {
+        '10.0.0.1': 0,
+        '10.0.0.2': 0,
+        '10.0.0.3': 0,
+        '10.0.0.4': 0,
+      };
+      for (const identity of pool.list())
+        counts[identity.egressId!] = (counts[identity.egressId!] ?? 0) + 1;
+      return counts;
+    };
+
+    // Gradual, not all at once: retiring half the pool in one pass would be a
+    // wave of warm-ups, which is the burst shape that earns a block.
+    pool.ensureSize(Date.now());
+    expect(load()['10.0.0.3']! + load()['10.0.0.4']!).toBeLessThanOrEqual(2);
+
+    for (let pass = 0; pass < 20; pass++) pool.ensureSize(Date.now());
+
+    const after = load();
+    expect(pool.list()).toHaveLength(12);
+    for (const ip of ['10.0.0.1', '10.0.0.2', '10.0.0.3', '10.0.0.4']) {
+      expect(after[ip]).toBeGreaterThanOrEqual(2);
+    }
+  });
+
+  it('leaves a balanced pool alone', () => {
+    const { pool } = rig(['10.0.0.1', '10.0.0.2'], 8);
+    const before = new Map(pool.list().map((i) => [i.id, i.egressId]));
+    for (let pass = 0; pass < 5; pass++) pool.ensureSize(Date.now());
+    // No churn at all: rebalancing a balanced pool would retire personas for
+    // nothing, and history is what makes a persona credible.
+    for (const identity of pool.list()) {
+      expect(before.get(identity.id)).toBe(identity.egressId);
+    }
+    expect(pool.list()).toHaveLength(8);
+  });
+});
+
 describe('egress binding', () => {
   it('spreads identities evenly across the configured addresses', () => {
     const { pool } = rig(['10.0.0.1', '10.0.0.2', '10.0.0.3'], 6);
