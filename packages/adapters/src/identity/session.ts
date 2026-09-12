@@ -701,6 +701,11 @@ export class IdentitySession {
     IdentitySession.siteBlockedAt.set(siteKeyOf(response.url), Date.now());
     console.warn(
       `[identity] hard_block ${reason} on ${this.marketplace} via ${this.identity.id} ` +
+        // Which ADDRESS was refused. Without it a multi-egress deployment
+        // cannot answer the only question multiple addresses are bought to
+        // answer — whether the far end counts per address or aggregates them —
+        // and the whole measurement has to be run again.
+        `${this.identity.egressId ? ` from ${this.identity.egressId}` : ''} ` +
         `(status ${response.statusCode}, sha256 ${hash.slice(0, 12)}): ${detail}`,
     );
     this.pool.noteBlock(this.identity);

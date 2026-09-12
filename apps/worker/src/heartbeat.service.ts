@@ -67,6 +67,7 @@ export class HeartbeatService implements OnModuleInit, OnModuleDestroy {
             // reads very differently from the outage a bare "paused" implies.
             egressCount: snapshot.egressCount,
             egressPaused: snapshot.egressPaused,
+            egress: snapshot.egress,
           },
         },
         create: { id: 1, workerHeartbeatAt: now },

@@ -117,6 +117,14 @@ export class IdentityService implements OnModuleInit, OnModuleDestroy {
     isNight: boolean;
     egressCount: number;
     egressPaused: number;
+    egress: Array<{
+      id: string;
+      capPerMin: number;
+      usedLastHour: number;
+      blocksLastHour: number;
+      backoffLevel: number;
+      pausedUntil: number | null;
+    }>;
   } {
     const snaps = [...this.governors.values()].map((g) => g.snapshot(now));
     const first = snaps[0]!;
@@ -143,6 +151,21 @@ export class IdentityService implements OnModuleInit, OnModuleDestroy {
       isNight: first.isNight,
       egressCount: snaps.length,
       egressPaused: pausedSnaps.length,
+      // Per address, not just the totals. Whether the far end counts per
+      // address or aggregates a whole subnet is not answerable from a sum, and
+      // it is the question that decides whether buying more addresses works at
+      // all. Cheap to carry: a handful of numbers per address.
+      egress: [...this.governors.entries()].map(([id, governor]) => {
+        const snap = governor.snapshot(now);
+        return {
+          id,
+          capPerMin: Math.round(snap.capPerMin * 10) / 10,
+          usedLastHour: snap.usedLastHour,
+          blocksLastHour: snap.blocks.length,
+          backoffLevel: snap.backoffLevel,
+          pausedUntil: snap.pausedUntil,
+        };
+      }),
     };
   }
 

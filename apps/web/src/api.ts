@@ -213,6 +213,20 @@ export interface ScraperHealth {
   egressCount?: number;
   /** How many of those are currently backed off. */
   egressPaused?: number;
+  /**
+   * Per source address: what it is allowed, what it used, and what it was
+   * refused. A sum cannot say whether the far end counts per address or
+   * aggregates them, and that is the question multiple addresses exist to
+   * answer.
+   */
+  egress?: Array<{
+    id: string;
+    capPerMin: number;
+    usedLastHour: number;
+    blocksLastHour: number;
+    backoffLevel: number;
+    pausedUntil: number | null;
+  }>;
 }
 
 /** Per-product bandwidth (wire/compressed bytes) over a window. */
