@@ -1,6 +1,7 @@
 import * as cheerio from 'cheerio';
 import type { ScrapeDebug } from '@pricepulse/shared';
 import type { IdentitySession } from '../identity/session.js';
+import { CheckError } from '../errors.js';
 
 /**
  * Location-aware scraping (pincode). Amazon India localises price, delivery and
@@ -14,9 +15,18 @@ import type { IdentitySession } from '../identity/session.js';
  * is cached per identity+pincode. Amazon binds the glow cookie to the session
  * that set it, so it can never be shared between identities: a cookie minted by
  * one persona and replayed by another is a contradiction of exactly the kind
- * this layer exists to prevent. Returns undefined on any failure — callers then
- * fetch without a location (marketplace default), never hard-failing.
+ * this layer exists to prevent. Returns undefined when the location could not
+ * be set; a refusal from Amazon is rethrown as the block it is, never disguised
+ * as a missing location.
  */
+
+/**
+ * Failures that must not be flattened into "no location". Each already means
+ * something specific to the pipeline — a block to back off from, a listing that
+ * is gone — and `pageFetch` has already acted on it (cooled the identity,
+ * captured the body) by the time it throws.
+ */
+const PROPAGATE: ReadonlySet<string> = new Set(['fetch_blocked', 'captcha', 'listing_removed']);
 
 const CACHE_TTL_MS = 20 * 60_000;
 const locationCache = new Map<string, { cookie: string; expiresAt: number }>();
@@ -42,13 +52,17 @@ export async function amazonLocationCookie(
   try {
     // 1. Seed cookies + read the glow CSRF token from the location modal. This
     //    is the identity opening the product page it is about to price, so it
-    //    is a navigation — the session paces and meters it accordingly.
-    const seed = await session.request(seedUrl, {
-      kind: 'cookie_mint',
-      debug,
-      retry: forceRefresh,
-      navigation: true,
-    });
+    //    goes through `pageFetch` like every other page load: warmed up first if
+    //    the identity is fresh, classified, paced off a timestamp that actually
+    //    advances, and cooled if Amazon refuses it.
+    //
+    //    It used to call `session.request` directly and skip all four. On
+    //    13 Sep 2026 that let fresh identities hit a product page cold, read a
+    //    ~1.3 KB refusal as "no token", and — with no block recorded and
+    //    `lastRequestAt` never stamped — be handed straight back out by
+    //    least-recently-used rotation: one identity failed six products in three
+    //    minutes, loading a refused page each time.
+    const seed = await session.pageFetch(seedUrl, { kind: 'cookie_mint', debug });
     const modal =
       cheerio.load(seed.body)('#nav-global-location-data-modal-action').attr('data-a-modal') ?? '';
     const token = modal.match(/anti-csrftoken-a2z"\s*:\s*"([^"]+)"/)?.[1];
@@ -83,7 +97,13 @@ export async function amazonLocationCookie(
     if (!cookie) return undefined;
     locationCache.set(key, { cookie, expiresAt: Date.now() + CACHE_TTL_MS });
     return cookie;
-  } catch {
+  } catch (err) {
+    // A refusal is not "location unavailable" — it is a block, and it has to
+    // reach the pipeline as one, so the check is recorded as fetch_blocked and
+    // not as a localisation fault. Only genuinely non-block failures (a modal
+    // without a token, a transport error on the address-change XHR) still
+    // degrade to "no location".
+    if (err instanceof CheckError && PROPAGATE.has(err.reason)) throw err;
     return undefined;
   }
 }
