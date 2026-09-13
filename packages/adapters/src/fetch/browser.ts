@@ -43,8 +43,51 @@ const VIEWPORTS = {
   mobile: { width: 393, height: 852 },
 } as const;
 
+/** A cookie scoped the way the site itself scopes it: registrable domain, root path. */
+export interface BrowserCookie {
+  name: string;
+  value: string;
+  domain: string;
+  path: string;
+}
+
+/**
+ * Turn the identity's HTTP cookie header into cookies the browser profile will
+ * actually send, plus a pattern matching every cookie the site may have left in
+ * the profile already.
+ *
+ * A `Cookie:` header carries no domain, and the browser tier used to add each
+ * pair with `url`, which makes a HOST-ONLY cookie on `www.amazon.in`. But the
+ * persistent profile already holds Amazon's own cookies on `.amazon.in` from
+ * earlier visits, so the result was two `session-id`s, two `ubid-acbin`s — the
+ * profile's and the identity's. Amazon read the profile's, whose session never
+ * had a delivery location set, and on 13 Sep 2026 four browser-tier checks
+ * loaded 8–9 MB pages three times each and still reported "did not apply
+ * pincode". Scoping to the registrable domain, after clearing the site's
+ * cookies, makes the browser's session the identity's session exactly.
+ */
+export function browserCookiesFor(
+  cookieHeader: string,
+  url: string,
+): { domain: RegExp; cookies: BrowserCookie[] } {
+  const site = new URL(url).hostname.toLowerCase().replace(/^www\./, '');
+  const escaped = site.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const cookies = cookieHeader
+    .split(';')
+    .map((pair): BrowserCookie | null => {
+      const eq = pair.indexOf('=');
+      if (eq <= 0) return null;
+      const name = pair.slice(0, eq).trim();
+      if (!name) return null;
+      return { name, value: pair.slice(eq + 1).trim(), domain: `.${site}`, path: '/' };
+    })
+    .filter((c): c is BrowserCookie => c !== null);
+  return { domain: new RegExp(`(^|\\.)${escaped}$`), cookies };
+}
+
 interface PersistentContext {
-  addCookies(cookies: Array<{ name: string; value: string; url: string }>): Promise<void>;
+  addCookies(cookies: BrowserCookie[]): Promise<void>;
+  clearCookies(options?: { domain?: string | RegExp }): Promise<void>;
   route(
     pattern: string,
     handler: (route: {
@@ -224,18 +267,15 @@ export async function createBrowserTier(
           // Apply a caller-supplied cookie (Amazon's glow location cookie) so a
           // browser-tier fetch is localised exactly like the HTTP tier. Without it,
           // the browser would load the IP-default location and record a wrong price.
+          // Cleared first, then domain-scoped — see `browserCookiesFor` for why
+          // adding them alongside the profile's own cookies never localised.
           const cookieHeader = options?.headers?.cookie;
           if (cookieHeader) {
-            const cookies = cookieHeader
-              .split(';')
-              .map((pair) => {
-                const eq = pair.indexOf('=');
-                return eq > 0
-                  ? { name: pair.slice(0, eq).trim(), value: pair.slice(eq + 1).trim(), url }
-                  : null;
-              })
-              .filter((c): c is { name: string; value: string; url: string } => c !== null);
-            if (cookies.length) await context.addCookies(cookies);
+            const { domain, cookies } = browserCookiesFor(cookieHeader, url);
+            if (cookies.length) {
+              await context.clearCookies({ domain });
+              await context.addCookies(cookies);
+            }
           }
           // Meter true wire bytes (encoded) via CDP — best-effort observability.
           let wireBytes = 0;
