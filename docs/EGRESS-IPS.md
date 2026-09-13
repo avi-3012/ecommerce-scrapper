@@ -91,8 +91,43 @@ ENI=$(aws ec2 describe-instances --instance-ids <instance-id> \
 aws ec2 assign-private-ip-addresses --network-interface-id "$ENI" --secondary-private-ip-address-count 4
 ```
 
-Instance-type limits apply — a `t3.medium` allows 6 IPv4 per interface, which is
-enough for five.
+Instance-type limits apply, and **the primary address counts against them**.
+Check yours before allocating anything — this is the one step that cannot be
+worked around later without a stop/start:
+
+| Instance type | IPv4 per interface | Egress addresses beside the primary |
+|---|---|---|
+| `t3.medium` | 6  | 5  |
+| `t3.large`  | 12 | 11 |
+| `t3.xlarge` | 15 | 14 |
+
+```bash
+TOKEN=$(curl -sX PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 300")
+curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/instance-type
+```
+
+To go past your type's limit, **resize rather than attach a second interface**.
+A second ENI in the same subnet needs source-based policy routing on the host,
+or replies leave through the primary interface and connections from the second
+one fail asymmetrically — silently, and only under load. A resize is a stop,
+a type change and a start: the secondary private IPs and their Elastic IP
+associations live on the interface and survive it, and so does the netplan
+file. Budget two to three minutes of downtime.
+
+**Scale the identity pool with the addresses.** Raise `identities.count` to
+roughly ten per address *before* listing new addresses in `egress`. New
+identities are created on the least-loaded address, so they fill the new ones
+first and the aged personas on the existing addresses stay where they are.
+Adding addresses to a fixed pool instead forces the rebalancer to retire
+established identities to make room — on 13 Sep 2026 moving from two addresses
+to four retired 23 of them, and the fresh replacements drew a wave of blocks
+while they warmed up.
+
+**Stage the addresses.** Do all the AWS and host work at once — an address the
+host holds but `egress` does not list is simply unused — but add them to
+`egress` a few at a time, a day apart. Fresh addresses and fresh identities both
+take hours to settle, and several arriving together is indistinguishable from
+the far end pushing back.
 
 ### 3. Associate each Elastic IP with one private IP
 
