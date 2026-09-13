@@ -3,6 +3,7 @@ import type { OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import {
   getUserWithSettings,
   inCapacityIds,
+  resolveCapacity,
   minutesOfDayIn,
   pruneScrapeAudits,
 } from '@pricepulse/core';
@@ -88,7 +89,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       }
 
       await this.maybeDailySweep(settings, new Date());
-      await this.runCycle();
+      await this.runCycle(settings);
     } catch (err) {
       console.error('Scheduler tick failed:', err instanceof Error ? err.message : err);
     } finally {
@@ -96,7 +97,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async runCycle(): Promise<void> {
+  private async runCycle(settings: Settings): Promise<void> {
     const cycleStart = new Date();
     // Replace identities lost to retirement. Without this the pool only ever
     // shrinks — blocks retire personas, nothing creates them, and a pool of 48
@@ -138,7 +139,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     this.lastGateReason = '';
 
     const capPerMin = this.identities.capPerMinTotal();
-    const due = await this.dueProducts(config.cycle.maxSec * 1_000);
+    const due = await this.dueProducts(config.cycle.maxSec * 1_000, settings);
 
     // Noise rides ALONG with the products rather than being extra traffic: a
     // noise fetch replaces a product fetch, so the plan size is the product
@@ -267,7 +268,18 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
    * the queue: a pending suspicion is a product whose recorded price is stale
    * on purpose, and it should not stay that way longer than it must.
    */
-  private async dueProducts(horizonMs: number): Promise<Product[]> {
+  /**
+   * Scraping capacity in force: the Settings value when the operator has set
+   * one, otherwise the scraping config's. Taken from the settings the tick
+   * already loaded, so changing it in Settings takes effect on the next cycle
+   * rather than at the next restart — which is the point of moving it out of a
+   * config file — without a second query to find that out.
+   */
+  private capacityInForce(settings: Settings): number {
+    return resolveCapacity(settings.scrapeCapacity, this.identities.config.limits.capacity);
+  }
+
+  private async dueProducts(horizonMs: number, settings: Settings): Promise<Product[]> {
     const dueSuspects = this.runner.suspects.due();
     // Everything falling due WITHIN this cycle, not only what is already
     // overdue at the instant it starts. Selecting on `now` quantises the real
@@ -286,7 +298,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     // Suspects are exempt. A suspect re-check is the second half of a check
     // already paid for, and dropping it wastes the first half while leaving a
     // price recorded as unconfirmed. There are only ever a handful.
-    const capacity = await inCapacityIds(this.prisma, this.identities.config.limits.capacity);
+    const capacity = await inCapacityIds(this.prisma, this.capacityInForce(settings));
     const [suspects, normal] = await Promise.all([
       dueSuspects.length
         ? this.prisma.product.findMany({
@@ -335,7 +347,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     // spreads the sweep across as many windows as the cap requires.
     // Only what capacity will actually check. Queuing the rest would mark them
     // due for a sweep that is never going to reach them.
-    const capacity = await inCapacityIds(this.prisma, this.identities.config.limits.capacity);
+    const capacity = await inCapacityIds(this.prisma, this.capacityInForce(settings));
     const products = await this.prisma.product.findMany({
       where: { status: 'active', ...(capacity ? { id: { in: [...capacity] } } : {}) },
       select: { id: true, checkIntervalMinutes: true },

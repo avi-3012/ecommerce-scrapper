@@ -19,7 +19,9 @@ import {
   ProductLimitError,
   deleteProduct,
   deletionImpact,
+  getUserWithSettings,
   inCapacityIds,
+  resolveCapacity,
   pauseProduct,
   registerProduct,
   resumeAllProducts,
@@ -65,7 +67,7 @@ const configurableFields = {
     .max(24 * 60)
     .nullable()
     .optional(),
-  // List priority: a positive integer, lower = shown first (1 = top).
+  // List priority: a positive integer, HIGHER wins. 2 outranks 1.
   priority: z.number().int().min(1).max(1_000_000).optional(),
 };
 
@@ -144,6 +146,12 @@ export class ProductsController {
         'The scraper did not answer in time. It may be paused, restarting, or waiting on the ' +
         'request budget — check the worker, then try again. Bulk import does not need it.',
     };
+  }
+
+  /** Scraping capacity in force: the Settings value, else the scraping config. */
+  private async capacityInForce(): Promise<number> {
+    const { settings } = await getUserWithSettings(this.prisma);
+    return resolveCapacity(settings.scrapeCapacity, loadScrapingConfigSafely().limits.capacity);
   }
 
   /** The configured hard cap, or null when there is room. */
@@ -243,9 +251,9 @@ export class ProductsController {
     const [items, total] = await Promise.all([
       this.prisma.product.findMany({
         where,
-        // Priority is always the primary key (1 shown first, then ascending);
-        // the user's chosen sort breaks ties within a priority band.
-        orderBy: [{ priority: 'asc' }, secondarySort],
+        // Priority is always the primary key, highest first; the user's chosen
+        // sort breaks ties within a priority band.
+        orderBy: [{ priority: 'desc' }, secondarySort],
         skip: (q.page - 1) * q.pageSize,
         take: q.pageSize,
         include: { category: { select: { id: true, name: true, color: true } } },
@@ -256,7 +264,7 @@ export class ProductsController {
     // product below the capacity line is never checked, and without this it
     // looks identical to one that is — the only visible difference would be a
     // last-checked time that quietly stops moving.
-    const capacity = await inCapacityIds(this.prisma, loadScrapingConfigSafely().limits.capacity);
+    const capacity = await inCapacityIds(this.prisma, await this.capacityInForce());
     return {
       items: items.map((p) => ({ ...p, scraped: capacity ? capacity.has(p.id) : true })),
       total,
@@ -272,7 +280,7 @@ export class ProductsController {
       include: { category: { select: { id: true, name: true, color: true } } },
     });
     if (!product) throw new NotFoundException();
-    const capacity = await inCapacityIds(this.prisma, loadScrapingConfigSafely().limits.capacity);
+    const capacity = await inCapacityIds(this.prisma, await this.capacityInForce());
     return { ...product, scraped: capacity ? capacity.has(product.id) : true };
   }
 

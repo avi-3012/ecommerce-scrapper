@@ -71,6 +71,7 @@ export interface Product {
   targetPrice: string | null;
   dropThresholdPct: string | null;
   checkIntervalMinutes: number | null;
+  /** List priority: HIGHER wins, so 2 is ranked and scraped before 1. */
   priority: number;
   status: ProductStatus;
   consecutiveFailures: number;
@@ -257,6 +258,8 @@ export interface SettingsView {
   checkIntervalMinutes: number;
   globalDropThresholdPct: string;
   consecutiveFailureLimit: number;
+  /** Products scraped at once, highest priority first. Null = deployment default. */
+  scrapeCapacity: number | null;
   monitoringPaused: boolean;
   alertTargetPrice: boolean;
   alertThresholdDrop: boolean;

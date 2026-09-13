@@ -156,7 +156,10 @@ model Product {
   categoryId           String?       @map("category_id") @db.Uuid
   // Per-product check cadence; null = use the global settings interval.
   checkIntervalMinutes Int?          @map("check_interval_minutes")
-  // User-set list priority: a positive integer, lower = shown first (1 = top).
+  // User-set list priority: a positive integer, HIGHER wins. 2 outranks 1, so
+  // raising a product's number moves it up the list and into scraping capacity
+  // ahead of its neighbours. The default of 1 is therefore the bottom of the
+  // pile, which is what you want for a product nobody has ranked yet.
   // The whole catalogue defaults to 1; raising a product's number sinks it.
   priority             Int           @default(1)
 
@@ -332,6 +335,16 @@ model Settings {
   checkIntervalMinutes    Int     @default(30) @map("check_interval_minutes")
   globalDropThresholdPct  Decimal @default(5) @map("global_drop_threshold_pct") @db.Decimal(5, 2)
   consecutiveFailureLimit Int     @default(5) @map("consecutive_failure_limit")
+  /**
+   * How many products are actively SCRAPED, highest priority first. Null falls
+   * back to `limits.capacity` in the scraping config.
+   *
+   * It lives here as well as in the config because it is the one budget number
+   * an operator needs to move without SSH: requests per minute is
+   * products / interval, and deciding how much of the connection's allowance to
+   * spend is an ordinary operational choice, not a redeploy.
+   */
+  scrapeCapacity          Int?    @map("scrape_capacity")
   monitoringPaused        Boolean @default(false) @map("monitoring_paused")
 
   alertTargetPrice   Boolean @default(true) @map("alert_target_price")

@@ -20,6 +20,12 @@ const patchSchema = z.object({
     .optional(),
   globalDropThresholdPct: z.number().min(0.1).max(99).optional(),
   consecutiveFailureLimit: z.number().int().min(2).max(50).optional(),
+  // How many products are actively scraped. Null hands the decision back to
+  // `limits.capacity` in the scraping config. No upper bound worth enforcing
+  // here: what the connection can actually serve is products / interval against
+  // the IP budget, and the scheduler stretches its cycle to fit whatever is
+  // asked for. A validator that guessed a ceiling would only forbid asking.
+  scrapeCapacity: z.number().int().min(0).max(100_000).nullable().optional(),
   monitoringPaused: z.boolean().optional(),
   alertTargetPrice: z.boolean().optional(),
   alertThresholdDrop: z.boolean().optional(),

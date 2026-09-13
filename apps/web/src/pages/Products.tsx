@@ -628,7 +628,7 @@ function ControlChips({
         min={1}
         max={1_000_000}
         placeholder="priority"
-        ariaLabel="List priority (1 = shown first)"
+        ariaLabel="Priority — higher wins, so 2 is checked before 1"
         render={(v) => `P${v ?? 1}`}
         onSave={(v) => v !== null && onEdit({ priority: v })}
       />

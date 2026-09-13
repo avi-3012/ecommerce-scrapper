@@ -10,7 +10,8 @@ import type { PrismaClient } from '@pricepulse/db';
  * those two meet: the top `capacity` products by `priority` are scraped, and
  * the rest are simply not checked until they move up.
  *
- * The ordering is deliberately total — priority, then creation order, then id.
+ * Priority reads HIGHER-WINS: a product at 2 is scraped before one at 1. The
+ * ordering is deliberately total — priority, then creation order, then id.
  * A partial order would let equal-priority products trade places between
  * cycles, so a product could sit at the boundary being checked every other
  * cycle, which is worse than either being in or being out.
@@ -18,7 +19,20 @@ import type { PrismaClient } from '@pricepulse/db';
  * Only `active` products compete. A paused or auto-paused listing holds no
  * slot, so a dead product does not permanently deny one to a live one.
  */
-export const CAPACITY_ORDER = [{ priority: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }] as const;
+export const CAPACITY_ORDER = [{ priority: 'desc' }, { createdAt: 'asc' }, { id: 'asc' }] as const;
+
+/**
+ * The capacity in force: the Settings value when set, otherwise the scraping
+ * config's. One resolver so the scheduler, the product list and the status
+ * report cannot disagree about how many products are being scraped — a
+ * disagreement there shows up as products that look active and never update.
+ */
+export function resolveCapacity(
+  settingsCapacity: number | null | undefined,
+  configCapacity: number,
+): number {
+  return settingsCapacity ?? configCapacity;
+}
 
 /**
  * The ids inside capacity, in priority order. Returns null when capacity is

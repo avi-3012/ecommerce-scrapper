@@ -1,6 +1,6 @@
 import { Controller, Get, Inject } from '@nestjs/common';
 import { PrismaService } from './prisma.service.js';
-import { capacityUsage } from '@pricepulse/core';
+import { capacityUsage, getUserWithSettings, resolveCapacity } from '@pricepulse/core';
 import { loadScrapingConfigSafely } from './scraping-config.js';
 
 /** System health snapshot (NFR-2, FR-5.1): what the dashboard banner and bot /status read. */
@@ -29,7 +29,11 @@ export class StatusController {
         }),
       ]);
 
-    const capacity = await capacityUsage(this.prisma, loadScrapingConfigSafely().limits.capacity);
+    const { settings } = await getUserWithSettings(this.prisma);
+    const capacity = await capacityUsage(
+      this.prisma,
+      resolveCapacity(settings.scrapeCapacity, loadScrapingConfigSafely().limits.capacity),
+    );
     const heartbeatAt = status?.workerHeartbeatAt ?? null;
     const workerStale = heartbeatAt === null || Date.now() - heartbeatAt.getTime() > 120_000;
 

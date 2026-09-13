@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { PrismaClient } from '@pricepulse/db';
-import { CAPACITY_ORDER, capacityUsage, inCapacityIds } from './capacity.js';
+import { CAPACITY_ORDER, capacityUsage, inCapacityIds, resolveCapacity } from './capacity.js';
 
 function stubPrisma(rows: Array<{ id: string }>, activeCount = rows.length) {
   const findMany = vi.fn().mockResolvedValue(rows);
@@ -19,7 +19,7 @@ describe('inCapacityIds', () => {
     expect(findMany).not.toHaveBeenCalled();
   });
 
-  it('takes the top N by priority, with a total order so the set cannot flap', async () => {
+  it('takes the top N by priority — HIGHER wins, so 2 outranks 1', async () => {
     const { prisma, findMany } = stubPrisma([{ id: 'a' }, { id: 'b' }]);
     const ids = await inCapacityIds(prisma, 2);
 
@@ -30,6 +30,9 @@ describe('inCapacityIds', () => {
     // Equal priorities must not trade places between cycles, or a product at
     // the boundary gets checked every other cycle.
     expect(args.orderBy).toEqual([...CAPACITY_ORDER]);
+    // Higher number = scraped first. The tiebreaks stay ascending: equal
+    // priorities are ranked oldest-first, which is stable across cycles.
+    expect(args.orderBy[0]).toEqual({ priority: 'desc' });
   });
 
   it('only lets active products hold a slot', async () => {
@@ -38,6 +41,21 @@ describe('inCapacityIds', () => {
     // A paused or auto-paused listing must free its slot, or one dead product
     // denies a live one forever.
     expect(findMany.mock.calls[0]?.[0]?.where?.status).toBe('active');
+  });
+});
+
+describe('resolveCapacity', () => {
+  it('prefers the Settings value so a change needs no redeploy', () => {
+    expect(resolveCapacity(80, 50)).toBe(80);
+  });
+
+  it('falls back to the config when Settings has not been set', () => {
+    expect(resolveCapacity(null, 50)).toBe(50);
+    expect(resolveCapacity(undefined, 50)).toBe(50);
+  });
+
+  it('honours an explicit 0, which means uncapped rather than unset', () => {
+    expect(resolveCapacity(0, 50)).toBe(0);
   });
 });
 

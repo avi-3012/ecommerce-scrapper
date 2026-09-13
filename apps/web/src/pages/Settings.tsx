@@ -51,6 +51,9 @@ function SettingsForm({
   const [interval, setIntervalMin] = useState(String(settings.checkIntervalMinutes));
   const [threshold, setThreshold] = useState(String(settings.globalDropThresholdPct));
   const [failureLimit, setFailureLimit] = useState(String(settings.consecutiveFailureLimit));
+  const [capacity, setCapacity] = useState(
+    settings.scrapeCapacity === null ? '' : String(settings.scrapeCapacity),
+  );
   const [pincode, setPincode] = useState(settings.pincode ?? '');
   const [dailyCheckTime, setDailyCheckTime] = useState(settings.dailyCheckTime ?? '');
   const [toggles, setToggles] = useState({
@@ -153,6 +156,18 @@ function SettingsForm({
             />
           </Field>
           <Field
+            label="Products checked at once"
+            hint="The highest-priority products up to this number are scraped; the rest wait their turn. Requests per minute is products ÷ interval, so raising this spends more of the connection's budget. Blank uses the deployment default."
+          >
+            <Input
+              type="number"
+              min="0"
+              value={capacity}
+              placeholder="deployment default"
+              onChange={(e) => setCapacity(e.target.value)}
+            />
+          </Field>
+          <Field
             label="Delivery pincode (optional)"
             hint="Localises Amazon prices/offers to this area. Leave blank for the default."
           >
@@ -184,6 +199,7 @@ function SettingsForm({
                 checkIntervalMinutes: Number(interval),
                 globalDropThresholdPct: Number(threshold),
                 consecutiveFailureLimit: Number(failureLimit),
+                scrapeCapacity: capacity.trim() === '' ? null : Number(capacity),
                 pincode: pincode.trim() === '' ? null : pincode.trim(),
                 dailyCheckTime: dailyCheckTime.trim() === '' ? null : dailyCheckTime.trim(),
               })

@@ -11,6 +11,9 @@ import type { IdentityService } from './identity.service.js';
  * dashboard froze at whatever time the last busy cycle ended and a perfectly
  * healthy worker was indistinguishable from a dead one.
  */
+/** Only the fields a cycle reads; capacity falls back to the scraping config. */
+const settings = { scrapeCapacity: null, checkIntervalMinutes: 5 } as unknown;
+
 function rig(options: { due: Array<{ id: string }>; gate?: string }) {
   const upsert = vi.fn().mockResolvedValue({});
   const prisma = {
@@ -46,7 +49,7 @@ describe('SchedulerService cycle reporting', () => {
   it('records a cycle even when nothing was due', async () => {
     const { service, upsert } = rig({ due: [] });
 
-    await (service as unknown as { runCycle(): Promise<void> }).runCycle();
+    await (service as unknown as { runCycle(s: unknown): Promise<void> }).runCycle(settings);
 
     expect(upsert).toHaveBeenCalledTimes(1);
     const update = upsert.mock.calls[0]![0].update as Record<string, unknown>;
@@ -59,7 +62,7 @@ describe('SchedulerService cycle reporting', () => {
     // unrecorded, it looks stopped precisely when someone is checking on it.
     const { service, upsert } = rig({ due: [{ id: 'a' }], gate: 'backoff' });
 
-    await (service as unknown as { runCycle(): Promise<void> }).runCycle();
+    await (service as unknown as { runCycle(s: unknown): Promise<void> }).runCycle(settings);
 
     expect(upsert).toHaveBeenCalledTimes(1);
     expect((upsert.mock.calls[0]![0].update as Record<string, unknown>).lastCycleDue).toBe(0);
