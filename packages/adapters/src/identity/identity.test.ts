@@ -1,6 +1,7 @@
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { CheckError } from '../errors.js';
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_SCRAPING_CONFIG,
@@ -466,6 +467,24 @@ describe('request shaping', () => {
 
     expect(headers['referer']).toBeUndefined();
     expect(headers['sec-fetch-site']).toBe('none');
+  });
+});
+
+describe('locally declined checks', () => {
+  // A check the connection declines to send says nothing about the product.
+  // The warm-up cooldown exists so one site-wide block does not authorise 48
+  // fresh identities to go and collect their own; charging every product that
+  // needed a fresh identity during those ten minutes turns a handful of real
+  // blocks into a wall of recorded failures.
+  it('marks a warm-up cooldown refusal as not attempted', () => {
+    const err = new CheckError(
+      'fetch_blocked',
+      'amazon.in returned a hard block 12s ago; not warming up more identities into it yet',
+      { attempted: false },
+    );
+    expect(err.attempted).toBe(false);
+    // Still a block for diagnosis — only the accounting changes.
+    expect(err.reason).toBe('fetch_blocked');
   });
 });
 

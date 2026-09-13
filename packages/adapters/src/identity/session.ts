@@ -498,10 +498,17 @@ export class IdentitySession {
     // drove the global backoff to its three-hour cap.
     const blockedAt = IdentitySession.siteBlockedAt.get(site);
     if (blockedAt && Date.now() - blockedAt < SITE_WARMUP_COOLDOWN_MS) {
+      // Not attempted: WE declined, the marketplace was never asked. Counting
+      // this against the product would charge it for the connection's caution
+      // — and because one site-wide block silences warm-ups for ten minutes,
+      // every product needing a fresh identity in that window takes the hit.
+      // On 13 Sep 2026 that turned 8 real blocks into 97 recorded failures and
+      // a success rate of 96.8% on a connection that was working.
       throw new CheckError(
         'fetch_blocked',
         `${site} returned a hard block ${Math.round((Date.now() - blockedAt) / 1000)}s ago; ` +
           `not warming up more identities into it yet`,
+        { attempted: false },
       );
     }
     const response = await this.request(homepage, { kind: 'warmup', debug, navigation: true });
