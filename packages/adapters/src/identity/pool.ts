@@ -466,6 +466,18 @@ export class IdentityPool {
     // Bounded per pass so the pool drains onto the new addresses over a few
     // minutes instead of retiring half the personas at once, which would be a
     // wave of warm-ups — the exact burst shape that earns a block.
+    // While the pool is still growing toward its target, let the refill do the
+    // balancing. New identities are created on the least-loaded address, so an
+    // empty address fills on its own — retiring aged personas to make room for
+    // identities that were about to be created anyway throws away exactly the
+    // history that makes a persona credible. Growing identities.count in the
+    // same change as the address list is how a large expansion avoids a
+    // retirement wave, and this is what makes that work: without it the
+    // rebalancer ran first, measured fair share against the CURRENT pool, and
+    // killed established identities pass after pass while the refill replaced
+    // them one for one.
+    if (this.identities.length < this.config.identities.count) return;
+
     const fairShare = Math.floor(this.identities.length / egress.length);
     for (let moved = 0; moved < maxMoves; moved++) {
       const load = this.egressLoad();

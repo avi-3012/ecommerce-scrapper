@@ -75,6 +75,38 @@ describe('egress rebalancing', () => {
     }
   });
 
+  it('fills new addresses from growth, retiring no established identity', () => {
+    // Adding addresses AND raising the pool in one change: the refill should
+    // place every new identity on the empty addresses, and not one aged persona
+    // should be retired to make room it was never going to need.
+    const dir = mkdtempSync(join(tmpdir(), 'pp-egress-'));
+    dirs.push(dir);
+    const store = new IdentityStore(dir);
+    const ids = DEFAULT_SCRAPING_CONFIG.identities;
+
+    const before = {
+      ...DEFAULT_SCRAPING_CONFIG,
+      egress: ['10.0.0.1', '10.0.0.2'],
+      identities: { ...ids, count: 8 },
+    };
+    new IdentityPool(before, store).ensureSize(Date.now());
+    const established = new IdentityPool(before, store).list().map((i) => i.id);
+
+    const after = {
+      ...DEFAULT_SCRAPING_CONFIG,
+      egress: ['10.0.0.1', '10.0.0.2', '10.0.0.3', '10.0.0.4'],
+      identities: { ...ids, count: 16 },
+    };
+    const pool = new IdentityPool(after, store);
+    for (let pass = 0; pass < 20; pass++) pool.ensureSize(Date.now());
+
+    const live = new Set(pool.list().map((i) => i.id));
+    for (const id of established) expect(live.has(id)).toBe(true);
+    expect(pool.list()).toHaveLength(16);
+    const load = (ip: string): number => pool.list().filter((i) => i.egressId === ip).length;
+    for (const ip of after.egress) expect(load(ip)).toBe(4);
+  });
+
   it('leaves a balanced pool alone', () => {
     const { pool } = rig(['10.0.0.1', '10.0.0.2'], 8);
     const before = new Map(pool.list().map((i) => [i.id, i.egressId]));

@@ -114,10 +114,15 @@ a type change and a start: the secondary private IPs and their Elastic IP
 associations live on the interface and survive it, and so does the netplan
 file. Budget two to three minutes of downtime.
 
-**Scale the identity pool with the addresses.** Raise `identities.count` to
-roughly ten per address *before* listing new addresses in `egress`. New
-identities are created on the least-loaded address, so they fill the new ones
-first and the aged personas on the existing addresses stay where they are.
+**Scale the identity pool with the addresses, in the same change.** When you
+list new addresses in `egress`, raise `identities.count` by the pool's current
+density for each one added — at 12 per address, adding 3 addresses means
++36. New identities are created on the least-loaded address, so they fill the
+new ones first, and while the pool is below its target the rebalancer retires
+nobody. Matching the existing density exactly means no aged persona is retired
+at all. Do **not** raise the count first and list the addresses later: the new
+identities would land on the existing addresses, and listing new ones afterward
+would force the rebalancer to retire them again.
 Adding addresses to a fixed pool instead forces the rebalancer to retire
 established identities to make room — on 13 Sep 2026 moving from two addresses
 to four retired 23 of them, and the fresh replacements drew a wave of blocks
