@@ -26,6 +26,16 @@ const patchSchema = z.object({
   // the IP budget, and the scheduler stretches its cycle to fit whatever is
   // asked for. A validator that guessed a ceiling would only forbid asking.
   scrapeCapacity: z.number().int().min(0).max(100_000).nullable().optional(),
+  // Flipkart's own interval and product limit, independent of Amazon's two
+  // fields above. Null interval = same as Amazon's; null capacity = no limit.
+  flipkartCheckIntervalMinutes: z
+    .number()
+    .int()
+    .min(1)
+    .max(24 * 60)
+    .nullable()
+    .optional(),
+  flipkartScrapeCapacity: z.number().int().min(0).max(100_000).nullable().optional(),
   monitoringPaused: z.boolean().optional(),
   alertTargetPrice: z.boolean().optional(),
   alertThresholdDrop: z.boolean().optional(),

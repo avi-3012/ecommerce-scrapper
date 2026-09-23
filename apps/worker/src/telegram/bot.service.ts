@@ -16,6 +16,8 @@ import type { FetchFn, IdentitySession } from '@pricepulse/adapters';
 import { PrismaService } from '../prisma.service.js';
 import { TelegramService } from './telegram.service.js';
 import { CheckRunnerService } from '../check-runner.service.js';
+import { WORKER_CONFIG } from '../config.js';
+import type { WorkerConfig } from '../config.js';
 
 const PAGE_SIZE = 8;
 
@@ -38,9 +40,16 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(TelegramService) private readonly telegram: TelegramService,
     @Inject(CheckRunnerService) private readonly runner: CheckRunnerService,
+    @Inject(WORKER_CONFIG) private readonly workerConfig: WorkerConfig,
   ) {}
 
   onModuleInit(): void {
+    // One poller per bot token, or Telegram refuses both with a 409 — so only
+    // the primary worker runs the bot, however many workers there are.
+    if (this.workerConfig.WORKER_ROLE !== 'primary') {
+      console.log('Telegram bot: handled by the primary worker');
+      return;
+    }
     // Watch for token configuration/changes each minute and (re)start polling.
     this.watchTimer = setInterval(() => void this.ensureStarted(), 60_000);
     void this.ensureStarted();
@@ -95,6 +104,13 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
     bot.command('add', async (ctx) => {
       const url = ctx.match?.trim();
       if (!url) return void (await ctx.reply('Usage: /add <listing URL>'));
+      const recognised = this.runner.registry.recognize(url);
+      if (
+        recognised.kind === 'listing' &&
+        !this.runner.identities.scrapes(recognised.marketplace)
+      ) {
+        return void (await ctx.reply(outOfScopeReply(recognised.marketplace)));
+      }
       await ctx.reply('Checking the listing — usually under 15 seconds…');
       const result = await previewUrl(
         {
@@ -143,6 +159,13 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
       const productId = this.lastListing[n - 1];
       if (!productId) {
         return void (await ctx.reply('Usage: /check <number from /list> — run /list first.'));
+      }
+      const target = await this.prisma.product.findUnique({
+        where: { id: productId },
+        select: { marketplace: true },
+      });
+      if (target && !this.runner.identities.scrapes(target.marketplace)) {
+        return void (await ctx.reply(outOfScopeReply(target.marketplace)));
       }
       await ctx.reply('Checking now…');
       const result = await this.runner.checkProductById(productId);
@@ -461,4 +484,16 @@ function helpText(): string {
 
 function escapeHtml(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/**
+ * The bot runs on the primary worker, which may not scrape every marketplace.
+ * Saying so beats a preview that times out or a check that reports "not found".
+ */
+function outOfScopeReply(marketplace: Marketplace): string {
+  const name = MARKETPLACE_LABELS[marketplace];
+  return (
+    `${name} products are handled by the ${name} worker, not this one. ` +
+    `Use the dashboard: adding a product or "Check now" there reaches the right worker.`
+  );
 }

@@ -24,8 +24,8 @@ export class DiagnosticsController {
     const hours = Math.min(Math.max(Number(hoursRaw) || 6, 1), 72);
     const since = new Date(Date.now() - hours * 3600_000);
 
-    const [status, products, history, audits, logs, failureCounts, alerts] = await Promise.all([
-      this.prisma.systemStatus.findUnique({ where: { id: 1 } }),
+    const [statusRows, products, history, audits, logs, failureCounts, alerts] = await Promise.all([
+      this.prisma.systemStatus.findMany({ orderBy: { id: 'asc' } }),
       this.prisma.product.findMany({
         select: {
           id: true,
@@ -98,6 +98,9 @@ export class DiagnosticsController {
       this.prisma.alert.count({ where: { firedAt: { gte: since } } }),
     ]);
 
+    // Row 1 is the primary worker; `scraper` and `worker` below keep describing
+    // it exactly as they did, and `workers` carries every worker in full.
+    const status = statusRows.find((r) => r.id === 1) ?? null;
     const total = await this.prisma.priceHistory.count({ where: { checkedAt: { gte: since } } });
     const ok = await this.prisma.priceHistory.count({
       where: { checkedAt: { gte: since }, success: true },
@@ -128,6 +131,21 @@ export class DiagnosticsController {
         },
         successRate7d: status?.successRate7d ?? null,
       },
+      workers: statusRows.map((row) => ({
+        id: row.id,
+        marketplaces: row.marketplaces,
+        heartbeatAt: row.workerHeartbeatAt,
+        stale: !row.workerHeartbeatAt || Date.now() - row.workerHeartbeatAt.getTime() > 120_000,
+        lastCycle: {
+          startedAt: row.lastCycleStartedAt,
+          endedAt: row.lastCycleEndedAt,
+          due: row.lastCycleDue,
+          succeeded: row.lastCycleSucceeded,
+          failed: row.lastCycleFailed,
+        },
+        successRate7d: row.successRate7d,
+        scraper: row.scraperHealth,
+      })),
       products: products.map((p) => ({ ...p, currentPrice: p.currentPrice?.toString() ?? null })),
       failures: history.map((h) => ({ ...h, checkedAt: h.checkedAt.toISOString() })),
       audits: audits.map((a) => ({ ...a, createdAt: a.createdAt.toISOString() })),

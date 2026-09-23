@@ -345,6 +345,21 @@ model Settings {
    * spend is an ordinary operational choice, not a redeploy.
    */
   scrapeCapacity          Int?    @map("scrape_capacity")
+  /**
+   * Flipkart's own limits. A separate worker scrapes Flipkart from a different
+   * connection with a different request budget, so its interval and product
+   * limit move independently of Amazon's two fields above — which keep exactly
+   * the meaning they had before Flipkart had a worker of its own.
+   *
+   * Interval: null means "same as checkIntervalMinutes".
+   * Capacity: null means no limit — every active Flipkart product is scraped,
+   * and the Flipkart worker's cycle stretches to fit its own budget. There is
+   * deliberately no config-file fallback here: the API and every worker must
+   * compute the same answer from the same place, and only the database is
+   * visible to all of them.
+   */
+  flipkartCheckIntervalMinutes Int? @map("flipkart_check_interval_minutes")
+  flipkartScrapeCapacity       Int? @map("flipkart_scrape_capacity")
   monitoringPaused        Boolean @default(false) @map("monitoring_paused")
 
   alertTargetPrice   Boolean @default(true) @map("alert_target_price")
@@ -429,7 +444,13 @@ model WorkerLog {
 // ── System status (§3.7) — single-row health snapshot (NFR-2, UC-9) ──
 
 model SystemStatus {
+  // One row per worker. Row 1 belongs to the primary worker and keeps every
+  // meaning it had when there was only one; a secondary worker (e.g. the
+  // Flipkart one) writes its own row, chosen by WORKER_STATUS_ID, so two
+  // workers never overwrite each other's heartbeat, vitals or cycle counters.
   id                 Int       @id @default(1)
+  /// Marketplaces the worker owning this row scrapes. Empty = all of them.
+  marketplaces       Marketplace[] @default([])
   workerHeartbeatAt  DateTime? @map("worker_heartbeat_at") @db.Timestamptz(6)
   lastCycleStartedAt DateTime? @map("last_cycle_started_at") @db.Timestamptz(6)
   lastCycleEndedAt   DateTime? @map("last_cycle_ended_at") @db.Timestamptz(6)

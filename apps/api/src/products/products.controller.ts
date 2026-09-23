@@ -19,16 +19,22 @@ import {
   ProductLimitError,
   deleteProduct,
   deletionImpact,
+  capacityByMarketplace,
   getUserWithSettings,
-  inCapacityIds,
-  resolveCapacity,
+  marketplaceHasLiveWorker,
   pauseProduct,
   registerProduct,
   resumeAllProducts,
   resumeProduct,
 } from '@pricepulse/core';
 import type { PreviewResult } from '@pricepulse/core';
-import { MARKETPLACES, STOCK_STATUSES, PRODUCT_STATUSES } from '@pricepulse/shared';
+import {
+  MARKETPLACES,
+  MARKETPLACE_LABELS,
+  STOCK_STATUSES,
+  PRODUCT_STATUSES,
+} from '@pricepulse/shared';
+import type { Marketplace } from '@pricepulse/shared';
 import type { Prisma } from '@pricepulse/db';
 import { PrismaService } from '../prisma.service.js';
 import { JobsService } from '../jobs.service.js';
@@ -138,6 +144,23 @@ export class ProductsController {
     const atCapacity = await this.checkCapacity();
     if (atCapacity) return atCapacity;
 
+    // A preview goes to the worker that scrapes the URL's marketplace. With
+    // none running it would sit in the queue for 45 s and then report that the
+    // scraper is busy — true of nothing. Say what is actually missing.
+    const marketplace = this.jobs.marketplaceFor(url);
+    const workers = await this.prisma.systemStatus.findMany({
+      select: { workerHeartbeatAt: true, marketplaces: true },
+    });
+    if (!marketplaceHasLiveWorker(workers, marketplace)) {
+      return {
+        kind: 'no_capacity',
+        message:
+          `No ${MARKETPLACE_LABELS[marketplace]} worker is running, so this listing can't be ` +
+          `previewed right now. Start the ${MARKETPLACE_LABELS[marketplace]} worker, or add the ` +
+          `product through bulk import, which needs no preview.`,
+      };
+    }
+
     const result = await this.jobs.previewProduct(url);
     if (result) return result;
     return {
@@ -148,10 +171,34 @@ export class ProductsController {
     };
   }
 
-  /** Scraping capacity in force: the Settings value, else the scraping config. */
-  private async capacityInForce(): Promise<number> {
+  /**
+   * Why each product is or is not being scraped. Each marketplace is cut to its
+   * own limit, and a marketplace with no live worker scrapes nothing at all —
+   * two different reasons a product never updates, which want two different
+   * fixes, so the list says which one applies.
+   */
+  private async scrapeStatus(): Promise<
+    (p: { id: string; marketplace: Marketplace }) => {
+      scraped: boolean;
+      notScrapedReason: 'no_worker' | 'capacity' | null;
+    }
+  > {
     const { settings } = await getUserWithSettings(this.prisma);
-    return resolveCapacity(settings.scrapeCapacity, loadScrapingConfigSafely().limits.capacity);
+    const [capacity, workers] = await Promise.all([
+      capacityByMarketplace(this.prisma, settings, loadScrapingConfigSafely().limits.capacity),
+      this.prisma.systemStatus.findMany({
+        select: { workerHeartbeatAt: true, marketplaces: true },
+      }),
+    ]);
+    const live = new Map(
+      MARKETPLACES.map((m) => [m, marketplaceHasLiveWorker(workers, m)] as const),
+    );
+    return (p) => {
+      if (!live.get(p.marketplace)) return { scraped: false, notScrapedReason: 'no_worker' };
+      const ids = capacity[p.marketplace];
+      const inside = ids ? ids.has(p.id) : true;
+      return { scraped: inside, notScrapedReason: inside ? null : 'capacity' };
+    };
   }
 
   /** The configured hard cap, or null when there is room. */
@@ -264,9 +311,9 @@ export class ProductsController {
     // product below the capacity line is never checked, and without this it
     // looks identical to one that is — the only visible difference would be a
     // last-checked time that quietly stops moving.
-    const capacity = await inCapacityIds(this.prisma, await this.capacityInForce());
+    const status = await this.scrapeStatus();
     return {
-      items: items.map((p) => ({ ...p, scraped: capacity ? capacity.has(p.id) : true })),
+      items: items.map((p) => ({ ...p, ...status(p) })),
       total,
       page: q.page,
       pageSize: q.pageSize,
@@ -280,8 +327,8 @@ export class ProductsController {
       include: { category: { select: { id: true, name: true, color: true } } },
     });
     if (!product) throw new NotFoundException();
-    const capacity = await inCapacityIds(this.prisma, await this.capacityInForce());
-    return { ...product, scraped: capacity ? capacity.has(product.id) : true };
+    const status = await this.scrapeStatus();
+    return { ...product, ...status(product) };
   }
 
   /** FR-2.3 made visible: every check, success or failure with reason. */
@@ -461,8 +508,13 @@ export class ProductsController {
   @Post(':id/check')
   @HttpCode(202)
   async checkNow(@Param('id') id: string) {
-    await this.ensureExists(id);
-    await this.jobs.enqueueCheckProduct(id);
+    const product = await this.prisma.product.findUnique({
+      where: { id },
+      select: { marketplace: true },
+    });
+    if (!product) throw new NotFoundException();
+    // Onto the queue of the worker that scrapes this product's marketplace.
+    await this.jobs.enqueueCheckProduct(id, product.marketplace);
     return { queued: true };
   }
 

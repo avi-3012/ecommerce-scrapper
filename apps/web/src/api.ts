@@ -93,6 +93,11 @@ export interface Product {
    * capacity, and it starts being checked.
    */
   scraped: boolean;
+  /**
+   * Why an active product is not being scraped, when it isn't: no worker is
+   * running for its marketplace, or it sits below that marketplace's limit.
+   */
+  notScrapedReason: 'no_worker' | 'capacity' | null;
 }
 
 /** FR-5.5: current price at or within the near-low margin of the recorded low. */
@@ -167,6 +172,8 @@ export interface SystemStatusReport {
     scraped: number;
     /** Active products queued behind capacity, waiting on priority. */
     waiting: number;
+    /** The same, per marketplace — each has its own limit and its own worker. */
+    byMarketplace: MarketplaceUsage[];
   };
   alertsLast24h: number;
   dropsLast24h: number;
@@ -181,6 +188,36 @@ export interface SystemStatusReport {
   scraper: ScraperHealth | null;
   workerHeartbeatAt: string | null;
   workerStale: boolean;
+  /** Every worker, primary first. */
+  workers: WorkerStatus[];
+}
+
+export interface MarketplaceUsage {
+  marketplace: Marketplace;
+  active: number;
+  /** Null = no limit. */
+  capacity: number | null;
+  scraped: number;
+  waiting: number;
+  /** Whether a worker that scrapes this marketplace has reported recently. */
+  hasLiveWorker: boolean;
+}
+
+export interface WorkerStatus {
+  id: number;
+  primary: boolean;
+  marketplaces: Marketplace[];
+  heartbeatAt: string | null;
+  stale: boolean;
+  lastCycle: {
+    startedAt: string | null;
+    endedAt: string | null;
+    due: number;
+    succeeded: number;
+    failed: number;
+  };
+  successRate7d: string | null;
+  scraper: ScraperHealth | null;
 }
 
 /** The scraper's vitals, written by the worker each cycle. */
@@ -260,6 +297,10 @@ export interface SettingsView {
   consecutiveFailureLimit: number;
   /** Products scraped at once, highest priority first. Null = deployment default. */
   scrapeCapacity: number | null;
+  /** Flipkart's own interval, in minutes. Null = same as checkIntervalMinutes. */
+  flipkartCheckIntervalMinutes: number | null;
+  /** Flipkart products scraped at once. Null = no limit. */
+  flipkartScrapeCapacity: number | null;
   monitoringPaused: boolean;
   alertTargetPrice: boolean;
   alertThresholdDrop: boolean;

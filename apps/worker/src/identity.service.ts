@@ -17,6 +17,8 @@ import {
 import type { BrowserTier, Identity, ScrapingConfig } from '@pricepulse/adapters';
 import type { Marketplace } from '@pricepulse/shared';
 import { PrismaService } from './prisma.service.js';
+import { WORKER_CONFIG } from './config.js';
+import type { WorkerConfig } from './config.js';
 
 /**
  * Owns the identity pool for the worker process: the pool itself, the IP
@@ -187,7 +189,18 @@ export class IdentityService implements OnModuleInit, OnModuleDestroy {
   private browserTier: BrowserTier | undefined;
   private shuttingDown = { aborted: false };
 
-  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
+  /** Marketplaces already warned about, so a refusal is logged once, not per request. */
+  private readonly outOfScopeWarned = new Set<Marketplace>();
+
+  constructor(
+    @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Inject(WORKER_CONFIG) private readonly workerConfig: WorkerConfig,
+  ) {}
+
+  /** Whether this worker scrapes `marketplace` (WORKER_MARKETPLACES). */
+  scrapes(marketplace: Marketplace): boolean {
+    return this.workerConfig.WORKER_MARKETPLACES.includes(marketplace);
+  }
 
   async onModuleInit(): Promise<void> {
     // Establishing a pool and recovering one are different situations.
@@ -235,6 +248,21 @@ export class IdentityService implements OnModuleInit, OnModuleDestroy {
 
   /** Take an identity for one fetch. Null when every identity is busy or resting. */
   acquire(marketplace: Marketplace, productId?: string): IdentitySession | null {
+    // The one gate every outbound request passes through, so it is where a
+    // worker refuses marketplaces it does not own — the scheduler, on-demand
+    // checks, previews, the Telegram bot and noise browsing all acquire here.
+    // A request for another marketplace would leave from this worker's
+    // addresses, and a refusal there is counted against THIS worker's budget.
+    if (!this.scrapes(marketplace)) {
+      if (!this.outOfScopeWarned.has(marketplace)) {
+        this.outOfScopeWarned.add(marketplace);
+        console.warn(
+          `[identity] WARN not sending ${marketplace} requests — this worker scrapes ` +
+            `${this.workerConfig.WORKER_MARKETPLACES.join(', ')} only (WORKER_MARKETPLACES)`,
+        );
+      }
+      return null;
+    }
     const site = marketplace === 'amazon_in' ? 'amazon.in' : 'flipkart.com';
     const open = this.openEgresses();
     const identity = this.pool.acquire({

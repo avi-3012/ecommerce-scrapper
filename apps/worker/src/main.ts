@@ -15,8 +15,10 @@ import {
   planCycle,
 } from '@pricepulse/adapters';
 import { PrismaClient } from '@pricepulse/db';
+import { capacityFor, getUserWithSettings } from '@pricepulse/core';
 import { WorkerModule } from './worker.module.js';
 import { loadConfig } from './config.js';
+import type { WorkerConfig } from './config.js';
 
 /**
  * The worker is a NestJS standalone application context: no HTTP listener.
@@ -33,7 +35,7 @@ import { loadConfig } from './config.js';
  * being told at boot, so a cycle more than 3× the requested one stops the
  * worker until someone decides what to do about it. `--force` proceeds anyway.
  */
-async function checkCapacity(force: boolean): Promise<void> {
+async function checkCapacity(force: boolean, worker: WorkerConfig): Promise<void> {
   let config;
   try {
     config = loadScrapingConfig();
@@ -55,9 +57,23 @@ async function checkCapacity(force: boolean): Promise<void> {
     // cycle" for work the scheduler correctly plans as 50 at 12/min over 4.2
     // minutes — a refusal-to-start threshold computed from numbers that
     // describe nothing the worker does.
-    const active = await prisma.product.count({ where: { status: 'active' } });
-    const capacity = config.limits.capacity;
-    const productCount = capacity > 0 ? Math.min(active, capacity) : active;
+    //
+    // And only THIS worker's marketplaces, each at its own limit: a Flipkart
+    // worker asked to justify Amazon's catalogue would refuse to start over
+    // products it will never touch.
+    const settings = await getUserWithSettings(prisma)
+      .then((r) => r.settings)
+      .catch(() => null);
+    let productCount = 0;
+    for (const marketplace of worker.WORKER_MARKETPLACES) {
+      const active = await prisma.product.count({ where: { status: 'active', marketplace } });
+      const capacity = settings
+        ? capacityFor(marketplace, settings, config.limits.capacity)
+        : marketplace === 'amazon_in'
+          ? config.limits.capacity
+          : 0;
+      productCount += capacity > 0 ? Math.min(active, capacity) : active;
+    }
     if (productCount === 0) return;
     const store = new IdentityStore(defaultStoreDir());
     const addresses = config.egress.length ? config.egress : [undefined];
@@ -95,8 +111,12 @@ async function checkCapacity(force: boolean): Promise<void> {
 }
 
 async function bootstrap(): Promise<void> {
-  loadConfig(); // fail fast before Nest starts
-  await checkCapacity(process.argv.includes('--force'));
+  const worker = loadConfig(); // fail fast before Nest starts
+  console.log(
+    `Worker scope: ${worker.WORKER_MARKETPLACES.join(', ')} · role ${worker.WORKER_ROLE} · ` +
+      `status row ${worker.WORKER_STATUS_ID}`,
+  );
+  await checkCapacity(process.argv.includes('--force'), worker);
 
   const app = await NestFactory.createApplicationContext(WorkerModule);
   app.enableShutdownHooks();

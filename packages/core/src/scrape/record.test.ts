@@ -87,3 +87,36 @@ describe('recordCheck — checks that never made a request', () => {
     expect(result.autoPaused).toBe(true); // 19 + 1 === limit of 20
   });
 });
+
+describe('recordCheck — next check follows the marketplace interval', () => {
+  // Uses the not-attempted path, which writes only nextCheckAt: the cleanest
+  // place to read the interval a product was scheduled with.
+  const schedule = async (marketplace: 'amazon_in' | 'flipkart'): Promise<number> => {
+    const { prisma, update } = stubPrisma();
+    await recordCheck(
+      prisma,
+      product({ marketplace, checkIntervalMinutes: null } as Partial<Product>),
+      failure(new CheckError('other', 'not sent', { attempted: false })),
+      {
+        checkIntervalMinutes: 30,
+        flipkartCheckIntervalMinutes: 5,
+        consecutiveFailureLimit: 20,
+      } as unknown as Settings,
+      NOW,
+    );
+    const next = update.mock.calls[0]![0].data.nextCheckAt as Date;
+    return (next.getTime() - NOW.getTime()) / 60_000;
+  };
+
+  it("schedules a Flipkart product on Flipkart's interval", async () => {
+    const minutes = await schedule('flipkart');
+    expect(minutes).toBeGreaterThanOrEqual(4.5);
+    expect(minutes).toBeLessThanOrEqual(5.5);
+  });
+
+  it("leaves an Amazon product on Amazon's interval, untouched by Flipkart's", async () => {
+    const minutes = await schedule('amazon_in');
+    expect(minutes).toBeGreaterThanOrEqual(27);
+    expect(minutes).toBeLessThanOrEqual(33);
+  });
+});

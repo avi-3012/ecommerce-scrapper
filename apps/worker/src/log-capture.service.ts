@@ -1,6 +1,8 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type { OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from './prisma.service.js';
+import { WORKER_CONFIG } from './config.js';
+import type { WorkerConfig } from './config.js';
 
 /**
  * Tees the worker's console output into the database so the dashboard can offer
@@ -30,7 +32,21 @@ export class LogCaptureService implements OnModuleInit, OnModuleDestroy {
   private readonly original: Partial<Record<Level, (...args: unknown[]) => void>> = {};
   private lastPrune = 0;
 
-  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
+  /**
+   * Prefixed to every line a SECONDARY worker writes. All workers share one log
+   * table and one diagnostics download, and an untagged line from the Flipkart
+   * worker reads as if the Amazon worker said it. The primary's lines stay
+   * untagged, so its log reads exactly as it always has.
+   */
+  private readonly tag: string;
+
+  constructor(
+    @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Inject(WORKER_CONFIG) config: WorkerConfig,
+  ) {
+    this.tag =
+      config.WORKER_ROLE === 'secondary' ? `[${config.WORKER_MARKETPLACES.join('+')}] ` : '';
+  }
 
   onModuleInit(): void {
     for (const level of ['log', 'warn', 'error'] as const) {
@@ -65,10 +81,10 @@ export class LogCaptureService implements OnModuleInit, OnModuleDestroy {
           return String(a);
         }
       })
-      .join(' ')
-      .slice(0, MAX_LINE);
+      .join(' ');
 
-    this.buffer.push({ at: new Date(), level, message });
+    this.buffer.push({ at: new Date(), level, message: (this.tag + message).slice(0, MAX_LINE) });
+
     // Drop the OLDEST when saturated: during an incident the newest lines are
     // the ones worth having.
     if (this.buffer.length > MAX_BUFFERED) this.buffer.splice(0, this.buffer.length - MAX_BUFFERED);

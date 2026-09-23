@@ -74,6 +74,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   onModuleInit(): void {
+    // Alerts are rows in a shared table, written by whichever worker recorded
+    // the check; exactly one worker delivers them, or every alert goes out once
+    // per worker. The digest rides the same loop.
+    if (this.config.WORKER_ROLE !== 'primary') return;
     this.timer = setInterval(() => void this.dispatchPending(), DISPATCH_PERIOD_MS);
   }
 

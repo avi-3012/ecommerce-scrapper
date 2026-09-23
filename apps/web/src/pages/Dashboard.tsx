@@ -12,8 +12,16 @@ import {
   TriangleAlert,
   XCircle,
 } from 'lucide-react';
+import { MARKETPLACE_LABELS } from '@pricepulse/shared';
 import { api, inr, relTime } from '../api.js';
-import type { AlertRow, Paged, ScraperHealth, SystemStatusReport } from '../api.js';
+import type {
+  AlertRow,
+  MarketplaceUsage,
+  Paged,
+  ScraperHealth,
+  SystemStatusReport,
+  WorkerStatus,
+} from '../api.js';
 import { Button, Card, CardSkeleton, EmptyState, Skeleton, StatCard } from '../ui.js';
 
 /** Dashboard home (WP-2.3): the UC-9 glance — health banner, stats, activity. */
@@ -57,14 +65,19 @@ export function DashboardPage(): JSX.Element {
           icon={Package}
           tone="brand"
           sub={
-            // Capacity is the number that matters when it is set: "active" and
-            // "being checked" stop being the same thing above the line.
-            (status.products.capacity
-              ? `${status.products.scraped} of ${status.products.capacity} being checked` +
-                (status.products.waiting > 0
-                  ? ` · ${status.products.waiting} waiting on priority`
-                  : '')
-              : `${status.products.active} active`) +
+            // Per marketplace once more than one is in play: each has its own
+            // limit and its own worker, and a single total would hide which
+            // one is falling behind.
+            (inPlay(status).length > 1
+              ? inPlay(status).map(usageLine).join(' · ')
+              : // Capacity is the number that matters when it is set: "active" and
+                // "being checked" stop being the same thing above the line.
+                status.products.capacity
+                ? `${status.products.scraped} of ${status.products.capacity} being checked` +
+                  (status.products.waiting > 0
+                    ? ` · ${status.products.waiting} waiting on priority`
+                    : '')
+                : `${status.products.active} active`) +
             ` · ${status.products.pausedUser + status.products.pausedAuto} paused` +
             (status.products.max
               ? ` · ${status.products.total}/${status.products.max} of limit`
@@ -87,7 +100,13 @@ export function DashboardPage(): JSX.Element {
         />
       </div>
 
-      {status.scraper ? <ScraperPanel health={status.scraper} /> : null}
+      {status.workers.length > 1 ? (
+        status.workers
+          .filter((w) => w.scraper)
+          .map((w) => <ScraperPanel key={w.id} health={w.scraper!} title={workerTitle(w)} />)
+      ) : status.scraper ? (
+        <ScraperPanel health={status.scraper} />
+      ) : null}
 
       <section>
         <div className="mb-2 flex items-center justify-between">
@@ -152,6 +171,30 @@ function HealthBanner({ status }: { status: SystemStatusReport }): JSX.Element {
             {status.workerHeartbeatAt ? relTime(status.workerHeartbeatAt) : 'it was last started'}.
             Prices are not being checked. If this persists for more than a few minutes, the
             maintainer may be needed.
+          </p>
+        </div>
+      </Card>
+    );
+  }
+  // A marketplace whose products are all waiting because no worker is running
+  // for it. Everything else can look healthy while it quietly never updates.
+  const orphaned = inPlay(status).filter((m) => !m.hasLiveWorker);
+  if (orphaned.length > 0) {
+    return (
+      <Card className="flex items-start gap-3 border-warning/40 bg-warning-subtle p-4">
+        <TriangleAlert className="mt-0.5 size-5 shrink-0 text-warning-fg" aria-hidden />
+        <div>
+          <p className="font-medium text-warning-fg">
+            {orphaned.map((m) => MARKETPLACE_LABELS[m.marketplace]).join(' and ')}{' '}
+            {orphaned.length === 1 ? 'has' : 'have'} no worker running
+          </p>
+          <p className="mt-1 text-sm text-warning-fg/90">
+            {orphaned
+              .map((m) => `${m.active} ${MARKETPLACE_LABELS[m.marketplace]} products`)
+              .join(' and ')}{' '}
+            {orphaned.reduce((n, m) => n + m.active, 0) === 1 ? 'is' : 'are'} waiting and will not
+            be checked until {orphaned.length === 1 ? 'its' : 'their'} worker is started. Everything
+            else is monitored normally.
           </p>
         </div>
       </Card>
@@ -244,7 +287,13 @@ export function alertSummary(a: AlertRow): string {
  * refusing us, congestion means they are struggling to serve us, and the
  * responses are different.
  */
-function ScraperPanel({ health }: { health: ScraperHealth }): JSX.Element {
+function ScraperPanel({
+  health,
+  title = 'Scraper',
+}: {
+  health: ScraperHealth;
+  title?: string;
+}): JSX.Element {
   const pausedUntil = health.pausedUntil;
   const paused = pausedUntil !== null && pausedUntil > Date.now();
   // Vitals are published on the worker's 30 s heartbeat. Much older than that
@@ -268,7 +317,7 @@ function ScraperPanel({ health }: { health: ScraperHealth }): JSX.Element {
   return (
     <section>
       <div className="mb-2 flex items-center justify-between">
-        <h2 className="font-medium text-fg">Scraper</h2>
+        <h2 className="font-medium text-fg">{title}</h2>
         <DiagnosticsButton />
       </div>
       <div className={`rounded-lg border p-4 ${toneClass}`}>
@@ -405,4 +454,22 @@ function DiagnosticsButton(): JSX.Element {
       </a>
     </div>
   );
+}
+
+/** Marketplaces with active products — the ones worth a line of their own. */
+function inPlay(status: SystemStatusReport): MarketplaceUsage[] {
+  return (status.products.byMarketplace ?? []).filter((m) => m.active > 0);
+}
+
+/** "Amazon India 200 of 200 checked", or "Flipkart 12 active (no worker)". */
+function usageLine(m: MarketplaceUsage): string {
+  const name = MARKETPLACE_LABELS[m.marketplace];
+  if (!m.hasLiveWorker) return `${name} ${m.active} active (no worker)`;
+  if (m.capacity === null) return `${name} ${m.scraped} checked`;
+  return `${name} ${m.scraped} of ${m.capacity} checked`;
+}
+
+function workerTitle(w: WorkerStatus): string {
+  const names = w.marketplaces.map((m) => MARKETPLACE_LABELS[m]).join(' + ');
+  return `Scraper — ${names}${w.stale ? ' (not reporting)' : ''}`;
 }

@@ -3,6 +3,7 @@ import { offersHash } from '@pricepulse/adapters';
 import type { Offer } from '@pricepulse/shared';
 import type { CheckOutcome } from './pipeline.js';
 import { evaluateAlerts } from '../alerts/engine.js';
+import { intervalFor } from './capacity.js';
 import type { AlertEvent, PreviousState } from '../alerts/engine.js';
 
 export interface RecordedCheck {
@@ -35,10 +36,10 @@ export async function recordCheck(
    */
   tiers: TierConfig = DEFAULT_TIERS,
 ): Promise<RecordedCheck> {
-  // Per-product interval overrides the global default when set, and stretches
-  // for products whose price has not moved in a long time.
+  // Per-product interval overrides the marketplace's default when set, and
+  // stretches for products whose price has not moved in a long time.
   const nextCheckAt = computeNextCheck(
-    product.checkIntervalMinutes ?? settings.checkIntervalMinutes,
+    product.checkIntervalMinutes ?? intervalFor(product.marketplace, settings),
     now,
     stillnessMs(product, now),
     tiers,

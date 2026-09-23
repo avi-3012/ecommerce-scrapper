@@ -2,10 +2,10 @@ import { Inject, Injectable } from '@nestjs/common';
 import type { OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import {
   getUserWithSettings,
-  inCapacityIds,
-  resolveCapacity,
+  intervalFor,
   minutesOfDayIn,
   pruneScrapeAudits,
+  scrapeScopeWhere,
 } from '@pricepulse/core';
 import {
   MAX_REFILL_PER_PASS,
@@ -14,10 +14,12 @@ import {
   searchKeywords,
   stretchWarning,
 } from '@pricepulse/adapters';
-import type { Product, Settings } from '@pricepulse/db';
+import type { Prisma, Product, Settings } from '@pricepulse/db';
 import { PrismaService } from './prisma.service.js';
 import { CheckRunnerService } from './check-runner.service.js';
 import { IdentityService } from './identity.service.js';
+import { WORKER_CONFIG, scrapesEverything } from './config.js';
+import type { WorkerConfig } from './config.js';
 
 /** How long to keep per-check scrape-audit rows before pruning. */
 const AUDIT_RETENTION_DAYS = 14;
@@ -60,7 +62,31 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(CheckRunnerService) private readonly runner: CheckRunnerService,
     @Inject(IdentityService) private readonly identities: IdentityService,
+    @Inject(WORKER_CONFIG) private readonly workerConfig: WorkerConfig,
   ) {}
+
+  /** The marketplaces this worker scrapes. Every query below is scoped to them. */
+  private get marketplaces(): WorkerConfig['WORKER_MARKETPLACES'] {
+    return this.workerConfig.WORKER_MARKETPLACES;
+  }
+
+  /** The system_status row this worker owns (1 = the primary). */
+  private get statusId(): number {
+    return this.workerConfig.WORKER_STATUS_ID;
+  }
+
+  /**
+   * What goes in the row's `marketplaces` column: empty for a worker that
+   * scrapes everything, so row 1 means exactly what it meant with one worker.
+   */
+  private get reportedMarketplaces(): WorkerConfig['WORKER_MARKETPLACES'] {
+    return scrapesEverything(this.workerConfig) ? [] : this.marketplaces;
+  }
+
+  /** Active products of this worker's marketplaces, as a Prisma filter. */
+  private get ownProducts(): Prisma.ProductWhereInput {
+    return { status: 'active', marketplace: { in: [...this.marketplaces] } };
+  }
 
   onModuleInit(): void {
     this.timer = setInterval(() => void this.tick(), IDLE_TICK_MS);
@@ -152,7 +178,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     this.cycleEndsAt = cycleStart.getTime() + plan.windowMs;
 
     if (!this.bannerPrinted) {
-      const total = await this.prisma.product.count({ where: { status: 'active' } });
+      const total = await this.prisma.product.count({ where: this.ownProducts });
       for (const line of this.identities.banner(total, plan.windowMs / 60_000)) console.log(line);
       this.bannerPrinted = true;
     }
@@ -269,14 +295,17 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
    * on purpose, and it should not stay that way longer than it must.
    */
   /**
-   * Scraping capacity in force: the Settings value when the operator has set
-   * one, otherwise the scraping config's. Taken from the settings the tick
-   * already loaded, so changing it in Settings takes effect on the next cycle
-   * rather than at the next restart — which is the point of moving it out of a
-   * config file — without a second query to find that out.
+   * The products this worker may check: its own marketplaces only, each cut to
+   * that marketplace's own capacity. Read from the settings the tick already
+   * loaded, so a limit changed in Settings takes effect on the next cycle.
    */
-  private capacityInForce(settings: Settings): number {
-    return resolveCapacity(settings.scrapeCapacity, this.identities.config.limits.capacity);
+  private scrapeScope(settings: Settings): Promise<Prisma.ProductWhereInput> {
+    return scrapeScopeWhere(
+      this.prisma,
+      this.marketplaces,
+      settings,
+      this.identities.config.limits.capacity,
+    );
   }
 
   private async dueProducts(horizonMs: number, settings: Settings): Promise<Product[]> {
@@ -298,19 +327,15 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     // Suspects are exempt. A suspect re-check is the second half of a check
     // already paid for, and dropping it wastes the first half while leaving a
     // price recorded as unconfirmed. There are only ever a handful.
-    const capacity = await inCapacityIds(this.prisma, this.capacityInForce(settings));
+    const scope = await this.scrapeScope(settings);
     const [suspects, normal] = await Promise.all([
       dueSuspects.length
         ? this.prisma.product.findMany({
-            where: { status: 'active', id: { in: dueSuspects.map((s) => s.productId) } },
+            where: { ...this.ownProducts, id: { in: dueSuspects.map((s) => s.productId) } },
           })
         : Promise.resolve([]),
       this.prisma.product.findMany({
-        where: {
-          status: 'active',
-          nextCheckAt: { lte: horizon },
-          ...(capacity ? { id: { in: [...capacity] } } : {}),
-        },
+        where: { AND: [this.ownProducts, scope, { nextCheckAt: { lte: horizon } }] },
         orderBy: { nextCheckAt: 'asc' },
       }),
     ]);
@@ -330,33 +355,34 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     if (target === null) return;
     if (minutesOfDayIn(settings.timezone, now) < target) return; // not yet time today
 
+    // Tracked on this worker's own row: each worker sweeps its own
+    // marketplaces, and a shared timestamp would let whichever swept first
+    // cancel the other's sweep for the day.
     const status = await this.prisma.systemStatus.findUnique({
-      where: { id: 1 },
+      where: { id: this.statusId },
       select: { lastDailySweepAt: true },
     });
     const last = status?.lastDailySweepAt ?? null;
     if (last && localDate(settings.timezone, last) === localDate(settings.timezone, now)) return;
 
     await this.prisma.systemStatus.upsert({
-      where: { id: 1 },
+      where: { id: this.statusId },
       update: { lastDailySweepAt: now },
-      create: { id: 1, lastDailySweepAt: now },
+      create: { id: this.statusId, marketplaces: this.reportedMarketplaces, lastDailySweepAt: now },
     });
 
     // Mark everything due, shortest interval first. The cycle planner then
     // spreads the sweep across as many windows as the cap requires.
     // Only what capacity will actually check. Queuing the rest would mark them
     // due for a sweep that is never going to reach them.
-    const capacity = await inCapacityIds(this.prisma, this.capacityInForce(settings));
+    const scope = await this.scrapeScope(settings);
     const products = await this.prisma.product.findMany({
-      where: { status: 'active', ...(capacity ? { id: { in: [...capacity] } } : {}) },
-      select: { id: true, checkIntervalMinutes: true },
+      where: { AND: [this.ownProducts, scope] },
+      select: { id: true, marketplace: true, checkIntervalMinutes: true },
     });
-    const ordered = [...products].sort(
-      (a, b) =>
-        (a.checkIntervalMinutes ?? settings.checkIntervalMinutes) -
-        (b.checkIntervalMinutes ?? settings.checkIntervalMinutes),
-    );
+    const interval = (p: (typeof products)[number]): number =>
+      p.checkIntervalMinutes ?? intervalFor(p.marketplace, settings);
+    const ordered = [...products].sort((a, b) => interval(a) - interval(b));
     await Promise.all(
       ordered.map((product, index) =>
         this.prisma.product.update({
@@ -381,17 +407,26 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     suspect: number,
   ): Promise<void> {
     const since = new Date(Date.now() - 7 * 24 * 3600 * 1000);
+    // Success over THIS worker's marketplaces. A worker that scrapes everything
+    // keeps counting everything, exactly as before; a scoped one is judged on
+    // its own products, not on another connection's.
+    const own: Prisma.PriceHistoryWhereInput = scrapesEverything(this.workerConfig)
+      ? {}
+      : { product: { marketplace: { in: [...this.marketplaces] } } };
     const [total7d, success7d] = await Promise.all([
-      this.prisma.priceHistory.count({ where: { checkedAt: { gte: since } } }),
-      this.prisma.priceHistory.count({ where: { checkedAt: { gte: since }, success: true } }),
+      this.prisma.priceHistory.count({ where: { ...own, checkedAt: { gte: since } } }),
+      this.prisma.priceHistory.count({
+        where: { ...own, checkedAt: { gte: since }, success: true },
+      }),
     ]);
     const successRate7d = total7d > 0 ? Math.round((success7d / total7d) * 10000) / 100 : null;
 
     // Cycle counters only. The scraper's vitals are published by the heartbeat,
     // which keeps running when a cycle does not.
     await this.prisma.systemStatus.upsert({
-      where: { id: 1 },
+      where: { id: this.statusId },
       update: {
+        marketplaces: this.reportedMarketplaces,
         lastCycleStartedAt: startedAt,
         lastCycleEndedAt: new Date(),
         lastCycleDue: dueCount,
@@ -400,7 +435,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         lastCycleFailed: failed,
         successRate7d,
       },
-      create: { id: 1 },
+      create: { id: this.statusId, marketplaces: this.reportedMarketplaces },
     });
     const payload = JSON.stringify({ type: 'status' });
     await this.prisma.$executeRaw`SELECT pg_notify('pricepulse_events', ${payload})`.catch(
@@ -412,18 +447,27 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
    * prunes the per-check scrape-audit trail past its retention window. */
   private async partitionUpkeep(): Promise<void> {
     if (Date.now() - this.lastPartitionUpkeep < 24 * 3600 * 1000) return;
-    try {
-      await this.prisma.$executeRawUnsafe('SELECT ensure_price_history_partitions(3)');
+    // Partitions and the audit trail are shared database state, so exactly one
+    // worker maintains them. Each worker still prunes its OWN capture
+    // directory below — that lives on its own disk, where nobody else can.
+    if (this.workerConfig.WORKER_ROLE === 'primary') {
+      try {
+        await this.prisma.$executeRawUnsafe('SELECT ensure_price_history_partitions(3)');
+        // Only on success, so a failed upkeep is retried on the next tick —
+        // the behaviour this had before there was more than one worker.
+        this.lastPartitionUpkeep = Date.now();
+      } catch (err) {
+        // Loud but non-fatal: inserts into a missing partition will fail loudly anyway (NFR-2).
+        console.error('Partition upkeep failed:', err instanceof Error ? err.message : err);
+      }
+      try {
+        const removed = await pruneScrapeAudits(this.prisma, AUDIT_RETENTION_DAYS);
+        if (removed > 0) console.log(`Pruned ${removed} scrape-audit rows past retention`);
+      } catch (err) {
+        console.error('Scrape-audit prune failed:', err instanceof Error ? err.message : err);
+      }
+    } else {
       this.lastPartitionUpkeep = Date.now();
-    } catch (err) {
-      // Loud but non-fatal: inserts into a missing partition will fail loudly anyway (NFR-2).
-      console.error('Partition upkeep failed:', err instanceof Error ? err.message : err);
-    }
-    try {
-      const removed = await pruneScrapeAudits(this.prisma, AUDIT_RETENTION_DAYS);
-      if (removed > 0) console.log(`Pruned ${removed} scrape-audit rows past retention`);
-    } catch (err) {
-      console.error('Scrape-audit prune failed:', err instanceof Error ? err.message : err);
     }
     // Captured failure bodies, same schedule. Debug output that grows without
     // bound is a disk-full incident waiting for the week nobody is watching —

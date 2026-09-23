@@ -54,6 +54,14 @@ function SettingsForm({
   const [capacity, setCapacity] = useState(
     settings.scrapeCapacity === null ? '' : String(settings.scrapeCapacity),
   );
+  const [fkInterval, setFkInterval] = useState(
+    settings.flipkartCheckIntervalMinutes === null
+      ? ''
+      : String(settings.flipkartCheckIntervalMinutes),
+  );
+  const [fkCapacity, setFkCapacity] = useState(
+    settings.flipkartScrapeCapacity === null ? '' : String(settings.flipkartScrapeCapacity),
+  );
   const [pincode, setPincode] = useState(settings.pincode ?? '');
   const [dailyCheckTime, setDailyCheckTime] = useState(settings.dailyCheckTime ?? '');
   const [toggles, setToggles] = useState({
@@ -127,17 +135,34 @@ function SettingsForm({
 
       <Section
         title="Monitoring"
-        hint="The 10-minute floor keeps monitoring polite to the marketplaces — checking faster risks being blocked."
+        hint="Each marketplace is scraped by its own worker, so each has its own interval and product limit. Checking faster spends more of that worker's request budget and risks being blocked."
       >
-        <div className="grid gap-3 sm:grid-cols-3">
-          <Field label="Check interval (minutes)">
-            <Input
-              type="number"
-              min="10"
-              value={interval}
-              onChange={(e) => setIntervalMin(e.target.value)}
-            />
-          </Field>
+        {/*
+          Each marketplace is scraped by its own worker from its own connection,
+          so each has its own interval and product limit. Amazon's two fields are
+          the ones that were always here, with exactly the same meaning.
+        */}
+        <MarketplaceLimits
+          name="Amazon"
+          interval={interval}
+          onInterval={setIntervalMin}
+          intervalPlaceholder=""
+          capacity={capacity}
+          onCapacity={setCapacity}
+          capacityPlaceholder="deployment default"
+          capacityHint="The highest-priority products up to this number are scraped; the rest wait their turn. Requests per minute is products ÷ interval, so raising this spends more of the connection's budget. Blank uses the deployment default."
+        />
+        <MarketplaceLimits
+          name="Flipkart"
+          interval={fkInterval}
+          onInterval={setFkInterval}
+          intervalPlaceholder="same as Amazon"
+          capacity={fkCapacity}
+          onCapacity={setFkCapacity}
+          capacityPlaceholder="no limit"
+          capacityHint="Flipkart's own limit, spent against the Flipkart worker's budget — it never takes anything from Amazon's. Blank means every active Flipkart product."
+        />
+        <div className="mt-4 grid gap-3 sm:grid-cols-3">
           <Field label="Default drop threshold %">
             <Input
               type="number"
@@ -153,18 +178,6 @@ function SettingsForm({
               min="2"
               value={failureLimit}
               onChange={(e) => setFailureLimit(e.target.value)}
-            />
-          </Field>
-          <Field
-            label="Products checked at once"
-            hint="The highest-priority products up to this number are scraped; the rest wait their turn. Requests per minute is products ÷ interval, so raising this spends more of the connection's budget. Blank uses the deployment default."
-          >
-            <Input
-              type="number"
-              min="0"
-              value={capacity}
-              placeholder="deployment default"
-              onChange={(e) => setCapacity(e.target.value)}
             />
           </Field>
           <Field
@@ -200,6 +213,8 @@ function SettingsForm({
                 globalDropThresholdPct: Number(threshold),
                 consecutiveFailureLimit: Number(failureLimit),
                 scrapeCapacity: capacity.trim() === '' ? null : Number(capacity),
+                flipkartCheckIntervalMinutes: fkInterval.trim() === '' ? null : Number(fkInterval),
+                flipkartScrapeCapacity: fkCapacity.trim() === '' ? null : Number(fkCapacity),
                 pincode: pincode.trim() === '' ? null : pincode.trim(),
                 dailyCheckTime: dailyCheckTime.trim() === '' ? null : dailyCheckTime.trim(),
               })
@@ -421,5 +436,43 @@ function SettingsForm({
         </div>
       </Section>
     </div>
+  );
+}
+
+/** One marketplace's check interval and product limit. */
+function MarketplaceLimits(props: {
+  name: string;
+  interval: string;
+  onInterval: (value: string) => void;
+  intervalPlaceholder: string;
+  capacity: string;
+  onCapacity: (value: string) => void;
+  capacityPlaceholder: string;
+  capacityHint: string;
+}): JSX.Element {
+  return (
+    <fieldset className="mt-4 first:mt-0">
+      <legend className="mb-2 text-sm font-medium text-fg">{props.name}</legend>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label="Check interval (minutes)">
+          <Input
+            type="number"
+            min="1"
+            value={props.interval}
+            placeholder={props.intervalPlaceholder || undefined}
+            onChange={(e) => props.onInterval(e.target.value)}
+          />
+        </Field>
+        <Field label="Products checked at once" hint={props.capacityHint}>
+          <Input
+            type="number"
+            min="0"
+            value={props.capacity}
+            placeholder={props.capacityPlaceholder}
+            onChange={(e) => props.onCapacity(e.target.value)}
+          />
+        </Field>
+      </div>
+    </fieldset>
   );
 }

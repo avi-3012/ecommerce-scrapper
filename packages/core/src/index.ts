@@ -9,3 +9,4 @@ export * from './settings.js';
 export * from './telegram/messages.js';
 export * from './crypto.js';
 export * from './jobs.js';
+export * from './workers.js';

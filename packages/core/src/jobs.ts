@@ -1,3 +1,6 @@
+import { MARKETPLACES } from '@pricepulse/shared';
+import type { Marketplace } from '@pricepulse/shared';
+
 /** pg-boss queue names and payloads (web → worker contract, plan §3.6). */
 export const JOB_QUEUES = {
   checkProduct: 'check_product',
@@ -21,6 +24,40 @@ export const JOB_QUEUES = {
    */
   resolveLinks: 'resolve_links',
 } as const;
+
+/**
+ * Queues that belong to a marketplace. Each is published per marketplace, as
+ * `<base>.<marketplace>`, and consumed only by a worker that scrapes it.
+ *
+ * With two workers on one shared queue, pg-boss hands each job to whichever
+ * worker asks first — and an Amazon worker handed a Flipkart check would send
+ * it from an address Flipkart refuses, then count the refusal against the
+ * budget Amazon runs on. The unsuffixed names in JOB_QUEUES are still consumed
+ * by a worker that scrapes every marketplace, so a single-worker deployment
+ * behaves exactly as before.
+ */
+export const MARKETPLACE_QUEUES = {
+  checkProduct: JOB_QUEUES.checkProduct,
+  previewProduct: JOB_QUEUES.previewProduct,
+  resolveLinks: JOB_QUEUES.resolveLinks,
+} as const;
+
+export type MarketplaceQueue = (typeof MARKETPLACE_QUEUES)[keyof typeof MARKETPLACE_QUEUES];
+
+/** The queue carrying `base` jobs for one marketplace. */
+export function marketplaceQueue(base: MarketplaceQueue, marketplace: Marketplace): string {
+  return `${base}.${marketplace}`;
+}
+
+/** Every queue name in use, for idempotent creation at startup. */
+export function allQueueNames(): string[] {
+  return [
+    ...Object.values(JOB_QUEUES),
+    ...Object.values(MARKETPLACE_QUEUES).flatMap((base) =>
+      MARKETPLACES.map((marketplace) => marketplaceQueue(base, marketplace)),
+    ),
+  ];
+}
 
 export interface CheckProductJob {
   productId: string;

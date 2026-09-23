@@ -2,7 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import type { OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from './prisma.service.js';
 import { IdentityService } from './identity.service.js';
-import { WORKER_CONFIG } from './config.js';
+import { WORKER_CONFIG, scrapesEverything } from './config.js';
 import type { WorkerConfig } from './config.js';
 
 /**
@@ -41,10 +41,15 @@ export class HeartbeatService implements OnModuleInit, OnModuleDestroy {
       // incident and reported "not paused" while fetching was paused for hours.
       const snapshot = this.identities.vitals(now.getTime());
       const pool = this.identities.pool.list();
+      // This worker's own row, and the marketplaces it covers — empty for a
+      // worker that scrapes everything, so row 1 keeps its original meaning.
+      const id = this.config.WORKER_STATUS_ID;
+      const marketplaces = scrapesEverything(this.config) ? [] : this.config.WORKER_MARKETPLACES;
       await this.prisma.systemStatus.upsert({
-        where: { id: 1 },
+        where: { id },
         update: {
           workerHeartbeatAt: now,
+          marketplaces,
           scraperHealth: {
             at: now.toISOString(),
             identities: pool.length,
@@ -70,7 +75,7 @@ export class HeartbeatService implements OnModuleInit, OnModuleDestroy {
             egress: snapshot.egress,
           },
         },
-        create: { id: 1, workerHeartbeatAt: now },
+        create: { id, marketplaces, workerHeartbeatAt: now },
       });
     } catch (err) {
       // A failed heartbeat must be loud in logs but must never kill the worker (NFR-1).

@@ -9,6 +9,9 @@ const config: WorkerConfig = {
   WORKER_HEARTBEAT_SECONDS: 30,
   SETTINGS_ENC_KEY: 'ab'.repeat(32),
   SCHEDULER_TICK_SECONDS: 20,
+  WORKER_MARKETPLACES: ['amazon_in', 'flipkart'],
+  WORKER_ROLE: 'primary',
+  WORKER_STATUS_ID: 1,
 };
 
 describe('HeartbeatService', () => {
@@ -23,7 +26,7 @@ describe('HeartbeatService', () => {
     expect(upsert).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: 1 },
-        create: { id: 1, workerHeartbeatAt: now },
+        create: { id: 1, marketplaces: [], workerHeartbeatAt: now },
       }),
     );
     const update = upsert.mock.calls[0]![0].update as Record<string, unknown>;
@@ -57,6 +60,27 @@ describe('HeartbeatService', () => {
     const service = new HeartbeatService(prisma, identityStub(), config);
 
     await expect(service.beat()).resolves.toBeUndefined();
+  });
+
+  it("writes a secondary worker's beat to its own row, with its marketplaces", async () => {
+    const upsert = vi.fn().mockResolvedValue({});
+    const prisma = { systemStatus: { upsert } } as unknown as PrismaService;
+    const secondary: WorkerConfig = {
+      ...config,
+      WORKER_MARKETPLACES: ['flipkart'],
+      WORKER_ROLE: 'secondary',
+      WORKER_STATUS_ID: 2,
+    };
+    const now = new Date('2026-07-10T12:00:00Z');
+
+    await new HeartbeatService(prisma, identityStub(), secondary).beat(now);
+
+    const call = upsert.mock.calls[0]![0];
+    // Never row 1: that is the primary's heartbeat, and overwriting it would
+    // make the Amazon worker look alive (or dead) on the Flipkart worker's word.
+    expect(call.where).toEqual({ id: 2 });
+    expect(call.create).toEqual({ id: 2, marketplaces: ['flipkart'], workerHeartbeatAt: now });
+    expect(call.update.marketplaces).toEqual(['flipkart']);
   });
 });
 

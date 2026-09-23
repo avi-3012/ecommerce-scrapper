@@ -463,7 +463,11 @@ function MetaBadges({ product }: { product: Product }): JSX.Element {
       )}
       {product.status === 'active' && !product.scraped && (
         <Badge tone="warning" icon={Clock}>
-          waiting on priority
+          {/* Two different reasons a product never updates, with two different
+              fixes: start the worker, or raise its priority / the limit. */}
+          {product.notScrapedReason === 'no_worker'
+            ? `no ${product.marketplace === 'flipkart' ? 'Flipkart' : 'Amazon'} worker running`
+            : 'waiting on priority'}
         </Badge>
       )}
       {product.consecutiveFailures > 0 && product.status === 'active' && (
