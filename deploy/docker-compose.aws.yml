@@ -100,6 +100,16 @@ services:
     # `-f`; it puts the worker on the host network so `egress` addresses can be
     # bound. See docs/EGRESS-IPS.md.
     #
+    # This worker scrapes AMAZON only. Flipkart refuses AWS addresses outright,
+    # so a Flipkart check sent from here fails and its refusal is counted
+    # against the budget Amazon runs on. Flipkart has its own worker — see
+    # docs/FLIPKART-WORKER.md. This stays the primary: Telegram, alert
+    # delivery and database housekeeping run here and nowhere else.
+    environment:
+      WORKER_MARKETPLACES: amazon_in
+      WORKER_ROLE: primary
+      WORKER_STATUS_ID: '1'
+    #
     # The largest allocation: 48 identities, up to 10 concurrent fetches, and a
     # Chromium browser tier that can hold a couple of persistent profiles open.
     mem_limit: 1792m

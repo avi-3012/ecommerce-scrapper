@@ -52,6 +52,13 @@ turn diurnal pacing on (`diurnal.enabled: true` — stop running flat at 4 a.m.)
 Both are in `config/scraping.aws.json`, which is bind-mounted, so it's an edit
 plus a worker restart.
 
+## Flipkart
+
+The worker on EC2 scrapes **Amazon only** (`WORKER_MARKETPLACES=amazon_in` in
+`deploy/docker-compose.aws.yml`). Flipkart refuses AWS addresses, so Flipkart
+products are scraped by a separate worker on a connection Flipkart serves —
+see [FLIPKART-WORKER.md](FLIPKART-WORKER.md).
+
 ## Cost
 
 | Item       | Spec                           | Monthly                                       |

@@ -1,0 +1,53 @@
+{
+  "$comment": [
+    "FLIPKART worker, on a home connection. Read by the worker started from",
+    "deploy/docker-compose.worker.yml (SCRAPING_CONFIG points here).",
+    "",
+    "This file sizes the worker: its identity pool and request budget. How many",
+    "Flipkart products are scraped, and how often, are set in the dashboard",
+    "under Settings -> Flipkart, where the API and both workers can all see them.",
+    "",
+    "The budget below is deliberately modest. This line is also your own",
+    "household's connection to Flipkart, so a block here is a block on you.",
+    "Raise ipCap.adaptive.maxPerMin in small steps and watch the Flipkart",
+    "scraper panel on the dashboard for blocks before raising it again."
+  ],
+  "connection": {
+    "$comment": "A household line. Keeps the identity pool at a plausible number of devices.",
+    "type": "home"
+  },
+  "identities": {
+    "$comment": "12 is the most devices a household plausibly has; the worker warns above it.",
+    "count": 12,
+    "rotation": "per-request",
+    "minGapMs": { "min": 30000, "max": 50000 }
+  },
+  "cycle": { "minSec": 55, "maxSec": 65 },
+  "ipCap": {
+    "$comment": "Starts at 3 requests/min and learns upward to at most 6.",
+    "mode": "adaptive",
+    "dayPerMin": 3,
+    "nightPerMin": 3,
+    "adaptive": {
+      "startPerMin": 3,
+      "maxPerMin": 6,
+      "minPerMin": 1.5,
+      "increaseEverySec": 300,
+      "decreaseFactor": 0.75,
+      "tolerateBlockRatio": 0.05
+    }
+  },
+  "egress": [],
+  "night": { "startIST": "00:00", "endIST": "07:00" },
+  "diurnal": { "enabled": false },
+  "tiers": { "warmAfterHours": 6, "coldAfterHours": 72, "warmMultiplier": 1, "coldMultiplier": 1 },
+  "noiseRatio": 0.06,
+  "funnelRatio": 0.08,
+  "maxConcurrent": 3,
+  "limits": {
+    "$comment": "Flipkart's product limit lives in Settings; capacity here is not used for Flipkart.",
+    "capacity": 0,
+    "maxProducts": 0,
+    "refuseWhenStretched": false
+  }
+}
