@@ -1,4 +1,5 @@
 import type { Identity, IdentityState, ScrapingConfig } from './types.js';
+import { egressIds } from './egress.js';
 import {
   IDENTITY_SPECS,
   assertIdentityConsistent,
@@ -410,7 +411,7 @@ export class IdentityPool {
    * leaves the identity on the host's default route.
    */
   private nextEgress(): string | undefined {
-    const egress = this.config.egress;
+    const egress = egressIds(this.config);
     if (egress.length === 0) return undefined;
     const load = this.egressLoad();
     let best = egress[0]!;
@@ -422,7 +423,7 @@ export class IdentityPool {
 
   /** How many live identities each configured address currently carries. */
   private egressLoad(): Map<string, number> {
-    const load = new Map(this.config.egress.map((ip) => [ip, 0]));
+    const load = new Map(egressIds(this.config).map((ip) => [ip, 0]));
     for (const identity of this.identities) {
       const ip = identity.egressId;
       if (ip !== undefined && load.has(ip)) load.set(ip, load.get(ip)! + 1);
@@ -437,7 +438,7 @@ export class IdentityPool {
    * slowly churns.
    */
   private rebalanceEgress(maxMoves: number): void {
-    const egress = this.config.egress;
+    const egress = egressIds(this.config);
     if (egress.length === 0) {
       for (const identity of this.identities) delete identity.egressId;
       return;

@@ -171,6 +171,17 @@ export interface ScrapingConfig {
    * Identities are distributed across them round-robin at creation and stay put.
    */
   egress: string[];
+  /**
+   * Static proxies to send through, as full URLs (`http://user:pass@host:port`).
+   * Each is an egress route exactly like an address in `egress`: its own
+   * budget, backoff and adaptive controller, identities bound to it for life.
+   *
+   * This is how a marketplace that refuses the host's own address range gets
+   * served from the same box. The URL carries credentials, so it lives only in
+   * a gitignored config and is never written anywhere else — routes are
+   * identified by `host:port` everywhere else.
+   */
+  proxies: string[];
   night: { startIST: string; endIST: string };
   noiseRatio: number;
   /**

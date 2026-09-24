@@ -54,10 +54,11 @@ plus a worker restart.
 
 ## Flipkart
 
-The worker on EC2 scrapes **Amazon only** (`WORKER_MARKETPLACES=amazon_in` in
-`deploy/docker-compose.aws.yml`). Flipkart refuses AWS addresses, so Flipkart
-products are scraped by a separate worker on a connection Flipkart serves —
-see [FLIPKART-WORKER.md](FLIPKART-WORKER.md).
+The `worker` service scrapes **Amazon only** (`WORKER_MARKETPLACES=amazon_in`).
+Flipkart refuses AWS addresses, so Flipkart products are scraped by a second
+worker on the same instance that sends through static ISP proxies — added with
+a third `-f deploy/docker-compose.flipkart.yml`. See
+[FLIPKART-WORKER.md](FLIPKART-WORKER.md).
 
 ## Cost
 

@@ -1,5 +1,6 @@
 import 'reflect-metadata';
 import { config as loadDotenv } from 'dotenv';
+import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 loadDotenv({ path: fileURLToPath(new URL('../../../.env', import.meta.url)) });
@@ -11,6 +12,7 @@ import {
   IpGovernor,
   configWarnings,
   defaultStoreDir,
+  egressIds,
   loadScrapingConfig,
   planCycle,
 } from '@pricepulse/adapters';
@@ -76,7 +78,8 @@ async function checkCapacity(force: boolean, worker: WorkerConfig): Promise<void
     }
     if (productCount === 0) return;
     const store = new IdentityStore(defaultStoreDir());
-    const addresses = config.egress.length ? config.egress : [undefined];
+    const routes = egressIds(config);
+    const addresses = routes.length ? routes : [undefined];
     const capPerMin = addresses.reduce(
       (total, ip) => total + new IpGovernor(config, store, () => {}, ip).capPerMin(),
       0,
@@ -112,10 +115,40 @@ async function checkCapacity(force: boolean, worker: WorkerConfig): Promise<void
 
 async function bootstrap(): Promise<void> {
   const worker = loadConfig(); // fail fast before Nest starts
+  // A config file the operator NAMED and that is not there is a mistake, not a
+  // request for the defaults. The defaults are 48 identities and no routes —
+  // for a worker whose whole point is the proxies in that file, running them
+  // means scraping from the host's own address, which is exactly what the
+  // file existed to prevent. (An unnamed, absent config still means defaults.)
+  const named = process.env.SCRAPING_CONFIG;
+  if (named && !existsSync(named)) {
+    console.error(
+      `Scraping config ${named} (SCRAPING_CONFIG) does not exist. ` +
+        `Copy the template beside it to that path and fill it in before starting this worker.`,
+    );
+    process.exit(1);
+  }
   console.log(
     `Worker scope: ${worker.WORKER_MARKETPLACES.join(', ')} · role ${worker.WORKER_ROLE} · ` +
       `status row ${worker.WORKER_STATUS_ID}`,
   );
+  // A secondary worker exists because its marketplace refuses this host's own
+  // addresses. Starting one with no routes at all means every request leaves
+  // from exactly the address it was created to avoid — legal, occasionally
+  // wanted (a home box), and otherwise a mistake that shows up only as blocks.
+  if (worker.WORKER_ROLE === 'secondary') {
+    try {
+      if (egressIds(loadScrapingConfig()).length === 0) {
+        console.warn(
+          '[identity] WARN no proxies or source addresses configured — this worker will send ' +
+            "from the host's own address. If that address is refused by its marketplace, " +
+            'fill `proxies` in the scraping config this worker reads.',
+        );
+      }
+    } catch {
+      // An unreadable config is reported, loudly, by the capacity check below.
+    }
+  }
   await checkCapacity(process.argv.includes('--force'), worker);
 
   const app = await NestFactory.createApplicationContext(WorkerModule);

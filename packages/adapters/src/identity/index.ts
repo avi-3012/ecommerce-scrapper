@@ -12,3 +12,4 @@ export * from './pool.js';
 export * from './session.js';
 export * from './testing.js';
 export { ulid, ulidTime } from './ulid.js';
+export * from './egress.js';

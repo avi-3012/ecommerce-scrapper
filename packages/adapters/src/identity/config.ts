@@ -2,6 +2,7 @@ import { isIP } from 'node:net';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { CapMode, ConnectionType, RotationMode, ScrapingConfig } from './types.js';
+import { proxyRouteId } from './egress.js';
 
 /**
  * Scraping config: pool size and shape, cycle window, and the whole-IP request
@@ -47,6 +48,7 @@ export const DEFAULT_SCRAPING_CONFIG: ScrapingConfig = {
   diurnal: { enabled: true },
   tiers: { warmAfterHours: 6, coldAfterHours: 72, warmMultiplier: 4, coldMultiplier: 15 },
   egress: [],
+  proxies: [],
   limits: { capacity: 0, maxProducts: 0, refuseWhenStretched: true },
 };
 
@@ -141,6 +143,7 @@ export function mergeConfig(raw: unknown): ScrapingConfig {
       coldMultiplier: num(tiers.coldMultiplier, d.tiers.coldMultiplier, 1, 500),
     },
     egress: parseEgress((raw as { egress?: unknown } | null)?.egress, d.egress),
+    proxies: parseProxies((raw as { proxies?: unknown } | null)?.proxies, d.proxies),
     limits: {
       capacity: int(limits.capacity, d.limits.capacity, 0, 100_000),
       maxProducts: int(limits.maxProducts, d.limits.maxProducts, 0, 100_000),
@@ -303,6 +306,41 @@ function parseEgress(value: unknown, fallback: string[]): string[] {
     }
     if (out.includes(ip)) throw new Error(`egress entry ${ip} is listed twice`);
     out.push(ip);
+  }
+  return out;
+}
+
+/**
+ * Proxy routes, validated as http(s) URLs with a host. got-scraping tunnels
+ * HTTP/2 through both, keeping the browser TLS fingerprint intact; SOCKS is
+ * not supported by it and is refused here rather than at the first request.
+ */
+function parseProxies(value: unknown, fallback: string[]): string[] {
+  if (value === undefined || value === null) return fallback;
+  if (!Array.isArray(value)) throw new Error('proxies must be an array of proxy URLs');
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of value) {
+    const raw = String(entry).trim();
+    if (!raw) continue;
+    let url: URL;
+    try {
+      url = new URL(raw);
+    } catch {
+      throw new Error(
+        `proxies entry ${JSON.stringify(raw)} is not a URL — expected http://user:pass@host:port`,
+      );
+    }
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      throw new Error(
+        `proxies entry ${url.host}: ${url.protocol.replace(':', '')} proxies are not supported — use http:// or https://`,
+      );
+    }
+    if (!url.hostname) throw new Error(`proxies entry ${JSON.stringify(raw)} has no host`);
+    const id = proxyRouteId(raw);
+    if (seen.has(id)) throw new Error(`proxies entry ${id} is listed twice`);
+    seen.add(id);
+    out.push(raw);
   }
   return out;
 }

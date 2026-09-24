@@ -85,6 +85,13 @@ export function browserCookiesFor(
   return { domain: new RegExp(`(^|\\.)${escaped}$`), cookies };
 }
 
+/** Playwright's per-context proxy: server without credentials, credentials beside it. */
+export interface BrowserProxy {
+  server: string;
+  username?: string;
+  password?: string;
+}
+
 interface PersistentContext {
   addCookies(cookies: BrowserCookie[]): Promise<void>;
   clearCookies(options?: { domain?: string | RegExp }): Promise<void>;
@@ -140,6 +147,12 @@ export async function createBrowserTier(
    * most pressure.
    */
   counter?: RequestCounter,
+  /**
+   * The proxy an identity's requests go through, if any. A browser can't bind
+   * a source address, but it can use a proxy — so on a proxy route a tier-2
+   * escalation leaves from exactly where the identity's tier-1 requests do.
+   */
+  proxyFor: (identity: Identity) => BrowserProxy | undefined = () => undefined,
 ): Promise<BrowserTier | undefined> {
   const specifier = 'playwright';
   let playwright: PlaywrightModule;
@@ -202,8 +215,10 @@ export async function createBrowserTier(
     }
     const userDataDir = join(profilesDir, identity.id);
     mkdirSync(userDataDir, { recursive: true });
+    const proxy = proxyFor(identity);
     const options = {
       headless: true,
+      ...(proxy ? { proxy } : {}),
       // Fixed for the life of the identity, and matched to its HTTP headers.
       userAgent: userAgentOf(identity),
       viewport: VIEWPORTS[identity.device],

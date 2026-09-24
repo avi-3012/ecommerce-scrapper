@@ -7,12 +7,16 @@ import {
   IdentitySession,
   IdentityStore,
   IpGovernor,
+  browserProxyFor,
   configWarnings,
   createBrowserTier,
   defaultStoreDir,
   describeState,
+  egressIds,
+  egressRoutes,
   loadScrapingConfig,
   maxProductsFor,
+  routeFor,
 } from '@pricepulse/adapters';
 import type { BrowserTier, Identity, ScrapingConfig } from '@pricepulse/adapters';
 import type { Marketplace } from '@pricepulse/shared';
@@ -44,7 +48,7 @@ export class IdentityService implements OnModuleInit, OnModuleDestroy {
    * five addresses the same minute costs a fifth of it.
    */
   readonly governors = new Map<string, IpGovernor>(
-    (this.config.egress.length ? this.config.egress : ['']).map((ip) => [
+    (egressIds(this.config).length ? egressIds(this.config) : ['']).map((ip) => [
       ip,
       new IpGovernor(
         this.config,
@@ -227,7 +231,9 @@ export class IdentityService implements OnModuleInit, OnModuleDestroy {
     }
     // The governor counts browser page loads too — they are the heaviest
     // request we make and were previously free as far as the budget knew.
-    this.browserTier = await createBrowserTier(undefined, this.defaultGovernor);
+    this.browserTier = await createBrowserTier(undefined, this.defaultGovernor, (identity) =>
+      browserProxyFor(routeFor(this.config, identity.egressId)),
+    );
     // Reported HERE, by the service that owns the value. It used to be logged
     // from CheckRunnerService, whose onModuleInit can run before this one has
     // finished — so it announced "not installed" on an image that ships
@@ -323,11 +329,7 @@ export class IdentityService implements OnModuleInit, OnModuleDestroy {
     const ratePerMin = this.capPerMinTotal();
     return [
       '─── PricePulse scraping ───────────────────────────────',
-      config.egress.length
-        ? `  connection      ${config.connection.type}, ${config.egress.length} source ` +
-          `address${config.egress.length === 1 ? '' : 'es'} (${config.egress.join(', ')}), ` +
-          `each with its own budget and backoff`
-        : `  connection      ${config.connection.type} (single address, own route)`,
+      describeRoutes(config),
       `  identities      ${identities.length} (${summariseStates(identities)})`,
       `  identity mode   ${config.identities.rotation} rotation, ` +
         `${Math.round(config.identities.minGapMs.min / 1000)}–${Math.round(config.identities.minGapMs.max / 1000)}s per-identity gap`,
@@ -396,4 +398,26 @@ function summariseStates(identities: readonly Identity[]): string {
     counts.set(state, (counts.get(state) ?? 0) + 1);
   }
   return [...counts.entries()].map(([state, n]) => `${n} ${state}`).join(', ');
+}
+
+/** The banner's connection line: addresses, proxies, or the host's own route. */
+function describeRoutes(config: ScrapingConfig): string {
+  const routes = egressRoutes(config);
+  if (routes.length === 0) {
+    return `  connection      ${config.connection.type} (single address, own route)`;
+  }
+  const addresses = routes.filter((r) => r.kind === 'address').map((r) => r.id);
+  const proxies = routes.filter((r) => r.kind === 'proxy').map((r) => r.id);
+  const parts: string[] = [];
+  if (addresses.length) {
+    parts.push(
+      `${addresses.length} source address${addresses.length === 1 ? '' : 'es'} (${addresses.join(', ')})`,
+    );
+  }
+  if (proxies.length) {
+    parts.push(
+      `${proxies.length} prox${proxies.length === 1 ? 'y' : 'ies'} (${proxies.join(', ')})`,
+    );
+  }
+  return `  connection      ${config.connection.type}, ${parts.join(' + ')}, each with its own budget and backoff`;
 }

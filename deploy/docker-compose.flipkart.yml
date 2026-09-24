@@ -1,0 +1,66 @@
+# PricePulse FLIPKART worker — on the same EC2 box as everything else, sending
+# through static ISP proxies. Layered on top of the AWS stack with a third -f:
+#
+#   docker compose --env-file deploy/.env.aws \
+#     -f deploy/docker-compose.aws.yml \
+#     -f deploy/docker-compose.egress.yml \
+#     -f deploy/docker-compose.flipkart.yml up -d --build
+#
+# Flipkart refuses AWS addresses on first contact, so this worker never uses
+# them: every request tunnels through a proxy listed in
+# config/scraping.flipkart.local.json. Each proxy is a route with its own
+# budget and backoff, exactly like the Amazon worker's addresses, and the two
+# workers share nothing — not identities, not budgets, not backoff.
+#
+# It is a SECONDARY worker: it only scrapes. Telegram, alert delivery and
+# database housekeeping stay with the Amazon worker, which is what keeps two
+# workers from sending every alert twice.
+#
+# See docs/FLIPKART-WORKER.md.
+services:
+  worker-flipkart:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.render
+    image: pricepulse-app:local
+    env_file: .env.aws
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
+    command: node apps/worker/dist/main.js
+    environment:
+      WORKER_MARKETPLACES: flipkart
+      WORKER_ROLE: secondary
+      # Row 1 is the Amazon worker's. This one reports into its own row, so the
+      # dashboard shows two workers rather than one that keeps changing its mind.
+      WORKER_STATUS_ID: '2'
+      # The gitignored local copy, because it holds proxy credentials. The
+      # worker refuses to start if this file is missing — running the defaults
+      # would mean scraping Flipkart from the AWS address the proxies exist to
+      # avoid.
+      SCRAPING_CONFIG: /repo/config/scraping.flipkart.local.json
+    # Stays on the compose network: proxies need no host networking, and the
+    # database is reached by name like the API does.
+    #
+    # Memory: the base stack already caps db 768 + api 640 + worker 1792 +
+    # caddy 128 = 3328 MB. On a 4 GiB instance this brings the caps to the
+    # physical limit; caps are ceilings, not reservations, and in practice the
+    # Amazon worker sits well below its cap — but if `docker stats` shows OOM
+    # kills after adding this, resize to c7i-flex.xlarge (8 GiB).
+    mem_limit: 768m
+    volumes:
+      # Its OWN identity pool. Sharing the Amazon worker's volume would mean two
+      # processes writing one pool, one set of governors and one set of jars.
+      - identities_flipkart:/repo/data/identities
+      - ../config:/repo/config:ro
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  identities_flipkart:

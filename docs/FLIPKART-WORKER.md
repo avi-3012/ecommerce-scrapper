@@ -1,98 +1,136 @@
 # The Flipkart worker
 
 Flipkart refuses AWS addresses on first contact, so Flipkart products are not
-scraped by the worker on EC2. They are scraped by a **second worker** that runs
-on a connection Flipkart serves — your home line — and reports into the same
-database.
+sent from the instance's own IPs. They are scraped by a **second worker on the
+same EC2 box** that sends every request through **static ISP proxies**. One
+box, one database, one deploy command.
 
 The two workers are fully separate:
 
-| | Amazon worker (EC2) | Flipkart worker (home) |
+| | Amazon worker | Flipkart worker |
 |---|---|---|
+| Compose service | `worker` | `worker-flipkart` |
 | Scrapes | Amazon only | Flipkart only |
+| Sends from | the instance's Elastic IPs | the proxies in its config |
 | Role | primary — also runs Telegram, alert delivery, housekeeping | secondary — only scrapes |
 | Status row | 1 | 2 |
-| Scraping config | `config/scraping.local.json` | `config/scraping.flipkart.json` |
+| Scraping config | `config/scraping.local.json` | `config/scraping.flipkart.local.json` |
 | Interval & product limit | Settings → Amazon | Settings → Flipkart |
-| Identities, budget, backoff | its own | its own |
+| Identities, budget, backoff | its own | its own, one budget per proxy |
 
 Nothing either worker does can reach the other's request budget. Until the
-Flipkart worker is running, Flipkart products simply wait: the dashboard says
-so, and each shows a *"no Flipkart worker running"* badge.
+Flipkart worker is running, Flipkart products wait: the dashboard says so, and
+each shows a *"no Flipkart worker running"* badge.
 
-## 1. Deploy the change on EC2 first
+## 1. Buy proxies
 
-The AWS worker now scrapes Amazon only. Pull and rebuild as usual; the
-`migrate` service applies the new migration before anything starts:
+**Static (long-term) ISP proxies, HTTP with username/password**, India location
+if the vendor offers it. Each proxy is one route with its own budget, so the
+number you need follows from the load, using the ~3.5 requests/min per address
+that Amazon's routes sustain until Flipkart's own number is measured:
+
+```
+requests/min ≈ products ÷ interval(min) × 1.1
+
+  50 laptops at 30 min   ≈  1.9/min   →  1 proxy
+ 300 laptops at 30 min   ≈ 11/min     →  3–4 proxies
+ 300 laptops at  5 min   ≈ 66/min     → ~19 proxies
+```
+
+Not supported: SOCKS proxies (the HTTP client cannot tunnel HTTP/2 through
+them). The config refuses them at load rather than at the first request.
+
+## 2. Configure
+
+On the EC2 box:
 
 ```bash
-cd ~/ecommerce-scrapper && git pull
+cd ~/ecommerce-scrapper
+cp config/scraping.flipkart.json config/scraping.flipkart.local.json
+```
+
+Edit `config/scraping.flipkart.local.json`:
+
+```json
+"proxies": ["http://user:pass@1.2.3.4:8080", "http://user:pass@5.6.7.8:8080"],
+"identities": { "count": 24, ... }
+```
+
+`identities.count` should be about **12 per proxy**. The file is gitignored
+because it holds credentials; the worker reads only this copy and refuses to
+start if it is missing.
+
+## 3. Deploy — one command
+
+```bash
+git pull
 docker compose --env-file deploy/.env.aws \
-  -f deploy/docker-compose.aws.yml -f deploy/docker-compose.egress.yml up -d --build
+  -f deploy/docker-compose.aws.yml \
+  -f deploy/docker-compose.egress.yml \
+  -f deploy/docker-compose.flipkart.yml up -d --build
 ```
 
-The worker's first log line now reads
-`Worker scope: amazon_in · role primary · status row 1`.
+The third `-f` adds the Flipkart worker. Keep all three on every later compose
+command for this stack (`logs`, `restart`, `down`). The `migrate` service
+applies the database migration before either worker starts.
 
-## 2. Open the database tunnel on the home machine
-
-The home worker reaches Postgres over SSH; Postgres stays bound to EC2's
-loopback and is never exposed.
+## 4. Verify
 
 ```bash
-ssh -N -L 15432:127.0.0.1:5432 -i pricepulse.pem ubuntu@<ELASTIC_IP>
+C="docker compose --env-file deploy/.env.aws -f deploy/docker-compose.aws.yml -f deploy/docker-compose.egress.yml -f deploy/docker-compose.flipkart.yml"
+$C logs worker-flipkart | head -40
 ```
 
-Keep it running (a terminal, `tmux`, or `autossh -M 0 …` to reconnect on its
-own). If it drops, the worker's heartbeat stops and the dashboard shows the
-Flipkart scraper as *not reporting*.
+Expect, in order:
 
-## 3. Configure and start the Flipkart worker
+```
+Worker scope: flipkart · role secondary · status row 2
+  connection      office, 2 proxies (1.2.3.4:8080, 5.6.7.8:8080), each with its own budget and backoff
+Telegram bot: handled by the primary worker
+```
+
+Proxies appear by `host:port` only — the credentials are never written to a
+log, a status row or a diagnostics bundle. One governor file per proxy:
 
 ```bash
-cp deploy/.env.worker.example deploy/.env.worker
+$C exec worker-flipkart ls /repo/data/identities/ | grep governor
 ```
 
-Fill in `DATABASE_URL` (the password from `deploy/.env.aws`) and
-`SETTINGS_ENC_KEY` (byte-identical to the one in `deploy/.env.aws`). Then:
+The dashboard shows a second scraper panel, **Scraper — Flipkart**, with a row
+per proxy: its allowance, usage, blocks and backoff. Its first few checks are
+warm-ups, so give it ten minutes before reading anything into the numbers.
 
-```bash
-docker compose --env-file deploy/.env.worker -f deploy/docker-compose.worker.yml up -d --build
-docker compose --env-file deploy/.env.worker -f deploy/docker-compose.worker.yml logs -f worker
-```
+The Amazon worker's first log line should still read
+`Worker scope: amazon_in · role primary · status row 1`; nothing about it
+changed.
 
-Expect `Worker scope: flipkart · role secondary · status row 2` and
-`Telegram bot: handled by the primary worker`.
-
-## 4. Set Flipkart's limits
+## 5. Set Flipkart's limits
 
 Dashboard → **Settings** → **Flipkart**:
 
 - **Check interval** — blank means the same as Amazon's.
 - **Products checked at once** — blank means every active Flipkart product.
-  Start small (say 50) and raise it once the Flipkart scraper panel shows no
-  blocks. Highest-priority products are scraped first.
+  **Set this before importing 300 laptops**: start at 50, and raise it once the
+  Flipkart panel shows no blocks. Highest-priority products are scraped first.
 
 Changes take effect on the next cycle; no restart.
 
-## Sizing
+## Replacing a proxy
 
-The home line is also your household's own connection to Flipkart. The
-worker's budget in `config/scraping.flipkart.json` starts at 3 requests/min and
-learns up to 6. At roughly one request per check, that is:
+Edit `config/scraping.flipkart.local.json` and restart only the Flipkart
+worker — the Amazon worker is untouched:
 
-```
-products ≈ requests/min × interval(min)
-  3/min × 30 min ≈  90 products     6/min × 30 min ≈ 180 products
+```bash
+$C up -d worker-flipkart
 ```
 
-Raise `ipCap.adaptive.maxPerMin` in small steps, a day at a time, watching the
-Flipkart panel's block count. Restart the worker after editing the file.
+Identities bound to a removed proxy are re-homed onto the remaining ones over
+a few minutes; identities for a new proxy are created gradually.
 
 ## Before Flipkart prices are trustworthy
 
-A test from a home connection found two Flipkart pipeline issues that are
-independent of where the worker runs:
+A test from a non-AWS connection found two Flipkart pipeline issues that no
+proxy fixes:
 
 - **Pincode localisation** did not verify for any of 9 products. With a
   delivery pincode set, in-stock Flipkart products fail rather than record an

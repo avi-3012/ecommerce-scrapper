@@ -8,6 +8,8 @@ import { decompressBody, recordProxyBytes } from '../fetch/bytes.js';
 import type { Identity } from './types.js';
 import type { IdentityPool } from './pool.js';
 import { siteKeyOf } from './pool.js';
+import { routeFor, transportOptions } from './egress.js';
+import type { EgressRoute } from './egress.js';
 import type { IpGovernor } from './governor.js';
 import type { IdentityCookieJar } from './jar.js';
 import { bodyHash, bodyHead, classifyResponse } from './classify.js';
@@ -210,7 +212,19 @@ export class IdentitySession {
    * the failures arrived in bursts rather than singly. Separate agents also
    * match the fiction: distinct browsers do not share a TCP connection.
    */
-  private get agent(): { http2: Http2Agent } {
+  /** Where this identity's requests leave from (undefined = host default route). */
+  private get route(): EgressRoute | undefined {
+    return routeFor(this.pool.config, this.identity.egressId);
+  }
+
+  /**
+   * This identity's own HTTP/2 connection pool, bound to its address — or
+   * nothing at all for a proxy route, where got-scraping builds the tunnelling
+   * agents from `proxyUrl` and an agent of ours would send around the proxy.
+   */
+  private get agent(): { http2: Http2Agent } | undefined {
+    const transport = transportOptions(this.route);
+    if (!transport.ownAgent) return undefined;
     IdentitySession.agents.set(
       this.identity.id,
       IdentitySession.agents.get(this.identity.id) ??
@@ -219,7 +233,7 @@ export class IdentitySession {
           // Bind the socket to this identity's own source address. The agent is
           // per-identity and an identity's address never changes, so every
           // connection it opens leaves from the same place for its whole life.
-          ...(this.identity.egressId ? { localAddress: this.identity.egressId } : {}),
+          ...(transport.localAddress ? { localAddress: transport.localAddress } : {}),
         }),
     );
     return { http2: IdentitySession.agents.get(this.identity.id)! };
@@ -352,6 +366,7 @@ export class IdentitySession {
       await this.awaitSlot();
     }
     const timeoutMs = options.timeoutMs ?? 20_000;
+    const transport = transportOptions(this.route);
     let response;
     let lastError = '';
     for (let attempt = 0; attempt <= TRANSPORT_RETRIES; attempt++) {
@@ -374,7 +389,12 @@ export class IdentitySession {
           headers: this.headersFor(url, { ...options, navigation }),
           cookieJar: this.jar,
           // This identity's own connection pool — see `agent` above.
-          ...(attempt < TRANSPORT_RETRIES ? { agent: this.agent } : {}),
+          ...(attempt < TRANSPORT_RETRIES && this.agent ? { agent: this.agent } : {}),
+          // A proxy route: got-scraping tunnels HTTP/2 through it and keeps the
+          // browser TLS fingerprint on the far side, so the proxy's address is
+          // what the marketplace sees and everything else about the identity
+          // is unchanged.
+          ...(transport.proxyUrl ? { proxyUrl: transport.proxyUrl } : {}),
           // No retries from got: a 403 or a CAPTCHA must reach the classifier
           // rather than be quietly re-issued against the same flagged IP. The
           // transport retry below is a different thing entirely.
@@ -382,7 +402,7 @@ export class IdentitySession {
           // address has to be set on the request itself or that retry would
           // silently leave from the default route — a different IP presenting
           // the same identity, which is the one thing this must never do.
-          ...(this.identity.egressId ? { localAddress: this.identity.egressId } : {}),
+          ...(transport.localAddress ? { localAddress: transport.localAddress } : {}),
           retry: { limit: 0 },
           throwHttpErrors: false,
           followRedirect: options.followRedirect ?? true,
