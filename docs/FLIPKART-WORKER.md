@@ -7,20 +7,20 @@ box, one database, one deploy command.
 
 The two workers are fully separate:
 
-| | Amazon worker | Flipkart worker |
-|---|---|---|
-| Compose service | `worker` | `worker-flipkart` |
-| Scrapes | Amazon only | Flipkart only |
-| Sends from | the instance's Elastic IPs | the proxies in its config |
-| Role | primary — also runs Telegram, alert delivery, housekeeping | secondary — only scrapes |
-| Status row | 1 | 2 |
-| Scraping config | `config/scraping.local.json` | `config/scraping.flipkart.local.json` |
-| Interval & product limit | Settings → Amazon | Settings → Flipkart |
-| Identities, budget, backoff | its own | its own, one budget per proxy |
+|                             | Amazon worker                                              | Flipkart worker                       |
+| --------------------------- | ---------------------------------------------------------- | ------------------------------------- |
+| Compose service             | `worker`                                                   | `worker-flipkart`                     |
+| Scrapes                     | Amazon only                                                | Flipkart only                         |
+| Sends from                  | the instance's Elastic IPs                                 | the proxies in its config             |
+| Role                        | primary — also runs Telegram, alert delivery, housekeeping | secondary — only scrapes              |
+| Status row                  | 1                                                          | 2                                     |
+| Scraping config             | `config/scraping.local.json`                               | `config/scraping.flipkart.local.json` |
+| Interval & product limit    | Settings → Amazon                                          | Settings → Flipkart                   |
+| Identities, budget, backoff | its own                                                    | its own, one budget per proxy         |
 
 Nothing either worker does can reach the other's request budget. Until the
 Flipkart worker is running, Flipkart products wait: the dashboard says so, and
-each shows a *"no Flipkart worker running"* badge.
+each shows a _"no Flipkart worker running"_ badge.
 
 ## 1. Buy proxies
 
@@ -127,15 +127,24 @@ $C up -d worker-flipkart
 Identities bound to a removed proxy are re-homed onto the remaining ones over
 a few minutes; identities for a new proxy are created gradually.
 
-## Before Flipkart prices are trustworthy
+## Pincode pricing
 
-A test from a non-AWS connection found two Flipkart pipeline issues that no
-proxy fixes:
+Flipkart applies a delivery pincode one call late: it prices each call for the
+pincode the identity already had, then switches to the one asked for. A new
+identity therefore makes two pricing calls on its first check, and one on every
+check after that, because its saved cookies keep the pincode. A price is
+recorded only when Flipkart's response shows it was worked out for your
+pincode; the delivery box on the page only repeats the pincode that was asked
+for, so it proves nothing.
 
-- **Pincode localisation** did not verify for any of 9 products. With a
-  delivery pincode set, in-stock Flipkart products fail rather than record an
-  unlocalised price.
-- **Price parsing** failed on 3 of 9 new phone listings. Laptops looked fine in
-  a smaller sample.
+## Products whose page Flipkart cannot show
 
-Both need fixing before Flipkart reaches Amazon's success rate.
+Some listings fail on Flipkart's side: every request gets its "Something went
+wrong! E002" page with HTTP 500, with or without the product slug or listing
+id, while other products load normally from the same proxy. The iPhone 17
+(256 GB, lavender) and the Motorola g96 were like this on 28 Sep 2026.
+
+The worker counts any Flipkart response other than 200 as a block. Each check
+of such a product cools an identity, and two within 15 minutes pause all
+Flipkart fetching for 10 minutes. Pause those products until they load on the
+site again.
