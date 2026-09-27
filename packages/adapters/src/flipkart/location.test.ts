@@ -260,3 +260,305 @@ describe('fetchFlipkartPincodePricing (verification vs. stock)', () => {
     expect(result.attempts).toBe(3);
   });
 });
+
+/**
+ * A page/fetch response in Flipkart's current widget format, trimmed from live
+ * captures to the fields that decide localisation. Each call is priced for the
+ * location the session held BEFORE it (`pricedFor`), while the delivery widget
+ * and the warranty link echo the pincode the call asked for (`asked`). Only the
+ * payments callout's `pin` names the pricing location: `-1` for none.
+ */
+const liveResponse = (fields: {
+  asked: string;
+  pricedFor: string;
+  price: number;
+  mrp?: number;
+  /** pls.unserviceabilityReason, e.g. "NO_PINCODE" or "NoServiceableVendor". */
+  reason?: string;
+  availabilityStatus?: string;
+  /** The delivery widget is left out for a listing that cannot be delivered. */
+  delivery?: boolean;
+  /** Some listings show no payments callout at all. */
+  payments?: boolean;
+}): string => {
+  const { asked, pricedFor, reason } = fields;
+  const inStock = (fields.availabilityStatus ?? 'IN_STOCK') === 'IN_STOCK';
+  const deliveryWidget = {
+    widget: {
+      type: 'ATLAS_WIDGET',
+      data: {
+        dlsData: {
+          default_fk_pp_delivery_widget_address_bar_location_tag_test_0: {
+            value: { label_0: { value: { text: asked } } },
+          },
+          box_2: {
+            action: {
+              type: 'NAVIGATION',
+              params: {
+                pin: asked,
+                pageKey: 'delivery-page',
+                url: `https://www.flipkart.com/item/product-delivery/itemId?pageKey=delivery-page&marketplace=FLIPKART&pin=${asked}&lid=LSTCOM1&pid=COM1`,
+              },
+            },
+          },
+        },
+      },
+    },
+  };
+  // Echoes the request, like the delivery widget — listed first, so a reader
+  // that took the first `pin=` it met would get the wrong one.
+  const warrantyWidget = {
+    widget: {
+      type: 'ATLAS_WIDGET',
+      data: {
+        dlsData: {
+          box_2: {
+            action: {
+              url: `https://www.flipkart.com/item/product-warranty/itemId?pageKey=product-warranty&marketplace=FLIPKART&pin=${asked}&lid=LSTCOM1`,
+            },
+          },
+        },
+      },
+    },
+  };
+  const paymentsWidget = {
+    widget: {
+      type: 'ATLAS_WIDGET',
+      data: {
+        dlsData: {
+          gridData_0: {
+            value: [
+              {},
+              {
+                value: {
+                  row_1: {
+                    action: {
+                      params: {
+                        url: `https://www.flipkart.com/item/payments-callout/itemId?pageKey=payments-callout&marketplace=Flipkart&pin=${pricedFor}&lid=LSTCOM1&pid=COM1`,
+                      },
+                    },
+                  },
+                },
+              },
+            ],
+          },
+        },
+      },
+    },
+  };
+  return JSON.stringify({
+    RESPONSE: {
+      pageData: {
+        pageContext: {
+          fdpEventTracking: {
+            events: {
+              psi: {
+                pls: {
+                  sellerId: '8187b3fdf3d64605',
+                  ...(reason ? { unserviceabilityReason: reason } : {}),
+                  listingId: 'LSTCOM1',
+                  availabilityStatus: fields.availabilityStatus ?? 'IN_STOCK',
+                  listingState: 'current',
+                  isAvailable: inStock,
+                  isServiceable: inStock && !reason,
+                },
+                ppd: { finalPrice: fields.price, fsp: fields.price, mrp: fields.mrp ?? null },
+              },
+            },
+          },
+        },
+      },
+      slots: [
+        ...(fields.delivery === false ? [] : [deliveryWidget]),
+        warrantyWidget,
+        ...(fields.payments === false ? [] : [paymentsWidget]),
+      ],
+    },
+  });
+};
+
+describe('fetchFlipkartPincodePricing — the pincode takes effect one call late', () => {
+  const reply = (body: string) =>
+    ({ statusCode: 200, body, rawBody: Buffer.from(body), headers: {} }) as never;
+  const inTurn = (...bodies: string[]): void => {
+    for (const body of bodies) mockedFetch.mockResolvedValueOnce(reply(body));
+  };
+
+  // The live sequence for one laptop through a fresh identity: first quoted with
+  // no location at ₹1,25,990 by a seller delivering in a week, then — once the
+  // session holds 122001 — at ₹1,39,990 by a seller delivering tomorrow.
+  const noLocation = liveResponse({
+    asked: '122001',
+    pricedFor: '-1',
+    reason: 'NO_PINCODE',
+    price: 125990,
+    mrp: 135000,
+  });
+  const localised = liveResponse({
+    asked: '122001',
+    pricedFor: '122001',
+    price: 139990,
+    mrp: 228090,
+  });
+
+  let session: IdentitySession;
+
+  beforeEach(() => {
+    mockedFetch.mockReset();
+    session = createTestSession('flipkart');
+  });
+
+  it('records the price for our pincode, not the no-location price a fresh session gets first', async () => {
+    inTurn(noLocation, localised);
+
+    const result = await fetchFlipkartPincodePricing(session, '/product/p/itm1?pid=P1', '122001');
+
+    expect(result.pricing).toEqual({
+      price: 139990,
+      mrp: 228090,
+      stockStatus: 'in_stock',
+      pincode: '122001',
+    });
+    expect(result.verified).toBe(true);
+    expect(result.applied).toBe('122001');
+    expect(result.attempts).toBe(2);
+    // The audit keeps the bytes the price came from.
+    expect(result.sample).toContain('"finalPrice":139990');
+  });
+
+  it('needs one call once the session already holds our pincode', async () => {
+    inTurn(localised);
+
+    const result = await fetchFlipkartPincodePricing(session, '/product/p/itm1?pid=P1', '122001');
+
+    expect(result.pricing?.price).toBe(139990);
+    expect(result.attempts).toBe(1);
+  });
+
+  it('never reads a no-location answer as "no seller delivers here"', async () => {
+    // NO_PINCODE comes with isServiceable: false. Counted as a delivery verdict,
+    // three of them recorded an in-stock laptop as out of stock.
+    mockedFetch.mockResolvedValue(reply(noLocation));
+
+    const result = await fetchFlipkartPincodePricing(session, '/product/p/itm1?pid=P1', '122001');
+
+    expect(result.pricing).toBeNull();
+    expect(result.verified).toBe(false);
+    expect(result.availability?.unserviceabilityReason).toBe('NO_PINCODE');
+    expect(result.attempts).toBe(3);
+  });
+
+  it("refuses the session's previous pincode's price, though every echo shows ours", async () => {
+    const previous = liveResponse({ asked: '122001', pricedFor: '560001', price: 131990 });
+    inTurn(previous, localised);
+
+    const result = await fetchFlipkartPincodePricing(session, '/product/p/itm1?pid=P1', '122001');
+
+    expect(result.pricing?.price).toBe(139990);
+    expect(result.attempts).toBe(2);
+  });
+
+  it('gives up with no price while every answer is priced for somewhere else', async () => {
+    mockedFetch.mockResolvedValue(
+      reply(liveResponse({ asked: '122001', pricedFor: '560001', price: 131990 })),
+    );
+
+    const result = await fetchFlipkartPincodePricing(session, '/product/p/itm1?pid=P1', '122001');
+
+    expect(result.pricing).toBeNull();
+    expect(result.applied).toBe('560001');
+  });
+
+  it('takes "not deliverable" about another pincode as no verdict on ours', async () => {
+    // Asked for 122001 by a session still at Port Blair: Flipkart answers
+    // NoServiceableVendor about Port Blair, then prices 122001 normally.
+    const portBlair = liveResponse({
+      asked: '122001',
+      pricedFor: '744101',
+      reason: 'NoServiceableVendor',
+      price: 61499,
+      delivery: false,
+    });
+    inTurn(portBlair, localised);
+
+    const result = await fetchFlipkartPincodePricing(session, '/product/p/itm1?pid=P1', '122001');
+
+    expect(result.pricing?.stockStatus).toBe('in_stock');
+    expect(result.pricing?.price).toBe(139990);
+  });
+
+  it('marks out of stock when every answer priced for OUR pincode says nobody delivers', async () => {
+    const undeliverable = (pricedFor: string): string =>
+      liveResponse({
+        asked: '744101',
+        pricedFor,
+        reason: 'NoServiceableVendor',
+        price: 61499,
+        delivery: false,
+      });
+    inTurn(undeliverable('122001'), undeliverable('744101'), undeliverable('744101'));
+
+    const result = await fetchFlipkartPincodePricing(session, '/product/p/itm1?pid=P1', '744101');
+
+    expect(result.pricing).toEqual({
+      price: null,
+      mrp: null,
+      stockStatus: 'out_of_stock',
+      pincode: '744101',
+    });
+    expect(result.attempts).toBe(3);
+  });
+
+  it('reaches no delivery verdict from answers priced only for another pincode', async () => {
+    mockedFetch.mockResolvedValue(
+      reply(
+        liveResponse({
+          asked: '122001',
+          pricedFor: '744101',
+          reason: 'NoServiceableVendor',
+          price: 61499,
+          delivery: false,
+        }),
+      ),
+    );
+
+    const result = await fetchFlipkartPincodePricing(session, '/product/p/itm1?pid=P1', '122001');
+
+    expect(result.pricing).toBeNull(); // failed, not "out of stock"
+  });
+
+  it('records out of stock on the first answer, whatever location it was priced for', async () => {
+    mockedFetch.mockResolvedValue(
+      reply(
+        liveResponse({
+          asked: '122001',
+          pricedFor: '744101',
+          reason: 'NotAvailable',
+          availabilityStatus: 'OUT_OF_STOCK',
+          price: 57990,
+          delivery: false,
+        }),
+      ),
+    );
+
+    const result = await fetchFlipkartPincodePricing(session, '/product/p/itm1?pid=P1', '122001');
+
+    expect(result.pricing?.stockStatus).toBe('out_of_stock');
+    expect(result.attempts).toBe(1);
+  });
+
+  it('without a payments callout, trusts only a call this check has already moved', async () => {
+    // Nothing on such a listing names the pricing location, so the first answer
+    // may belong to wherever the session was. The second is priced for ours:
+    // the first call moved the session there.
+    const unmarked = (price: number): string =>
+      liveResponse({ asked: '122001', pricedFor: '122001', price, payments: false });
+    inTurn(unmarked(131990), unmarked(139990));
+
+    const result = await fetchFlipkartPincodePricing(session, '/product/p/itm1?pid=P1', '122001');
+
+    expect(result.pricing?.price).toBe(139990);
+    expect(result.verified).toBe(true);
+    expect(result.attempts).toBe(2);
+  });
+});

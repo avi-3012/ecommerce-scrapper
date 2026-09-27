@@ -11,9 +11,23 @@ import type { IdentitySession } from '../identity/session.js';
  *   { pageUri, locationContext: { pincode, changed: true } }
  *
  * We call that with the configured pincode and read the localized price / MRP /
- * stock from the JSON — no browser, cookies or Google Places needed. Detailed
- * bank offers are NOT in this response, so they keep coming from the HTML page;
- * only price/MRP/stock are overridden.
+ * stock from the JSON — no browser or Google Places needed. Detailed bank offers
+ * are NOT in this response, so they keep coming from the HTML page; only
+ * price/MRP/stock are overridden.
+ *
+ * The pincode takes effect one call LATE. Flipkart prices each call for the
+ * location the session already holds (a cookie these responses set) and only
+ * then moves the session to the pincode in `locationContext`:
+ *
+ *   fresh session,       ask 122001 → priced with no location ("NO_PINCODE")
+ *   same session,        ask 122001 → priced for 122001
+ *   session at 744101,   ask 122001 → priced for 744101; the NEXT call is 122001
+ *
+ * So a fresh identity needs two calls; after that its persisted jar carries the
+ * pincode (the cookie lives 180 days) and one call does. Nothing a response
+ * shows about the location can be taken at face value: the delivery widget and
+ * its links echo the pincode we ASKED for, whatever the price was computed for.
+ * See `paymentsCalloutPinOf` for the one field that names the pricing location.
  */
 
 /** Marker the adapter injects into the HTML so the parser can apply the override. */
@@ -82,6 +96,11 @@ export function isUnbuyable(availability: ListingAvailability): boolean {
  * Note this is about LOCALISATION, not stock: these responses come back
  * `isAvailable: true` / `IN_STOCK`, so the out-of-stock path must be checked
  * first and is unaffected.
+ *
+ * It speaks only for the location the response was PRICED for, so it is
+ * consulted only once that is our pincode: asked for 122001 by a session still
+ * at Port Blair (744101), Flipkart answers "NoServiceableVendor" about Port
+ * Blair while every echo on the page reads 122001.
  */
 export function isPricingLocalised(
   availability: ListingAvailability,
@@ -93,16 +112,18 @@ export function isPricingLocalised(
 /**
  * The full result of a pincode-pricing fetch, including the trail we need for
  * the scrape-audit even when the price is NOT trusted: the HTTP status, the
- * pincode Flipkart actually resolved, and how many attempts we made. `pricing`
- * is non-null only when the resolved pincode matches the one we requested.
+ * pincode Flipkart actually priced for, and how many attempts we made.
+ * `pricing` carries a price only when the response was priced for the pincode
+ * we requested.
  */
 export interface PincodeFetchResult {
   pricing: PincodePricing | null;
   status: number | null;
+  /** The pincode the last response was PRICED for; null for none, or unknown. */
   applied: string | null;
   city: string | null;
   attempts: number;
-  /** True only when Flipkart echoed back OUR pincode (the price is location-trusted). */
+  /** True only when the price was computed for OUR pincode (location-trusted). */
   verified: boolean;
   /** Flipkart's buyability verdict, whether or not a price was resolved. */
   availability: ListingAvailability | null;
@@ -314,7 +335,9 @@ function extractSeller(
 
 /** A bounded raw JSON snippet around the pricing node — the source-of-truth bytes. */
 function pricingSample(body: string): string | null {
-  const idx = body.indexOf('"pricing"');
+  // Older responses carry a `pricing` node; current ones price from `psi.ppd`.
+  let idx = body.indexOf('"pricing"');
+  if (idx === -1) idx = body.indexOf('"ppd"');
   if (idx === -1) return null;
   return body.slice(Math.max(0, idx - 40), idx + 600);
 }
@@ -374,6 +397,61 @@ export function extractAppliedPincode(json: string): string | null {
 }
 
 /**
+ * The location a page/fetch response was PRICED for, from the payments
+ * callout's link (`…?pageKey=payments-callout&marketplace=Flipkart&pin=560001`).
+ * It reads `-1` while the session has no location, and it is the one field that
+ * follows the session rather than the request: the delivery widget's links
+ * (`pageKey=delivery-page`, `product-warranty`) carry the pincode we asked for,
+ * even on a response priced for somewhere else.
+ *
+ * Returns the raw pin ('-1' included), or null when there is no payments callout.
+ */
+function paymentsCalloutPinOf(root: unknown): string | null {
+  let found: string | null = null;
+  const walk = (n: unknown): void => {
+    if (found !== null) return;
+    if (typeof n === 'string') {
+      if (!n.includes('payments-callout')) return;
+      try {
+        const params = new URL(n).searchParams;
+        const pin = params.get('pin');
+        if (params.get('pageKey') === 'payments-callout' && pin && /^-?\d+$/.test(pin)) found = pin;
+      } catch {
+        // Not a URL.
+      }
+      return;
+    }
+    if (Array.isArray(n)) n.forEach(walk);
+    else if (n && typeof n === 'object') Object.values(n).forEach(walk);
+  };
+  walk((root as Node)?.RESPONSE);
+  return found;
+}
+
+/**
+ * The pincode a response was priced for; null when it was priced with no
+ * location, or it cannot tell. The evidence, strongest first:
+ *  - "NO_PINCODE": the session held no location, whatever the page echoes.
+ *  - The payments callout's pin (see `paymentsCalloutPinOf`).
+ *  - The pincode component of Flipkart's older responses, which applied the
+ *    pincode in the same call.
+ *  - `carried`: our pincode, once an earlier call in this check was answered
+ *    and so moved the session there — all that is left on a listing that shows
+ *    no payments callout.
+ */
+function pricedPincodeOf(
+  root: unknown,
+  availability: ListingAvailability,
+  legacy: AppliedLocation,
+  carried: string | null,
+): string | null {
+  if (availability.unserviceabilityReason === 'NO_PINCODE') return null;
+  const pin = paymentsCalloutPinOf(root);
+  if (pin !== null) return /^\d{6}$/.test(pin) ? pin : null;
+  return legacy.pincode ?? carried;
+}
+
+/**
  * Fetch localized price/MRP/stock for a pincode via Flipkart's page/fetch API.
  *
  * Terminal answers, in this order:
@@ -382,16 +460,20 @@ export function extractAppliedPincode(json: string): string | null {
  *     buyable listing, so demanding the echo here would reject a legitimate
  *     out-of-stock observation forever (and auto-pause the product). There is no
  *     price to get wrong, so there is nothing for the echo to protect.
- *  2. The listing IS buyable → the price is trusted only once Flipkart confirms
- *     it applied OUR pincode; otherwise retry, and never record an unverified
- *     price (an unverified response carries the IP-default price, which flaps).
- *  3. EVERY response says no seller delivers to the pincode → out of stock. The
- *     product page shows "not deliverable to your location" with no other
- *     seller, so there is nothing to buy here: record it as out of stock (which
- *     preserves the last known price) rather than failing the check forever.
- *     A single such response is NOT enough — Flipkart intermittently answers
- *     this way for a listing that does have a delivering seller, which is why
- *     attempt (2) retries first and only a unanimous verdict lands here.
+ *  2. The listing IS buyable → the price is trusted only once the response was
+ *     priced for OUR pincode, which on a fresh identity takes a second call (the
+ *     first one moves the session there — see the header); otherwise retry, and
+ *     never record an unverified price (it is the default or another location's
+ *     price, which flaps).
+ *  3. EVERY response priced for our pincode says no seller delivers there → out
+ *     of stock. The product page shows "not deliverable to your location" with
+ *     no other seller, so there is nothing to buy here: record it as out of
+ *     stock (which preserves the last known price) rather than failing the
+ *     check forever. A single such response is NOT enough — Flipkart
+ *     intermittently answers this way for a listing that does have a
+ *     delivering seller, which is why attempt (2) retries first and only a
+ *     unanimous verdict lands here. A response priced for another location, or
+ *     for none, is no evidence about ours and does not count.
  */
 export async function fetchFlipkartPincodePricing(
   session: IdentitySession,
@@ -408,10 +490,13 @@ export async function fetchFlipkartPincodePricing(
   let availability: ListingAvailability | null = null;
   let locationErrorCode: string | null = null;
   let attempts = 0;
-  // Unanimity tracking for (3): how many responses we actually parsed, and how
-  // many of those said no seller delivers to this pincode.
+  // Unanimity tracking for (3): how many responses were priced for our pincode,
+  // and how many of those said no seller delivers to it.
   let parsedResponses = 0;
   let noDeliveringSeller = 0;
+  // Whether an earlier call in this check was answered, and so has already
+  // moved the session to our pincode.
+  let sessionMoved = false;
   for (let attempt = 0; attempt < 3; attempt++) {
     attempts++;
     try {
@@ -458,10 +543,12 @@ export async function fetchFlipkartPincodePricing(
         }
         sample = pricingSample(body) ?? sample;
         const loc = appliedLocationOf(root);
-        applied = loc.pincode;
         city = loc.city;
         locationErrorCode = loc.errorCode;
         availability = availabilityOf(root);
+        applied = pricedPincodeOf(root, availability, loc, sessionMoved ? pincode : null);
+        // Whatever this answer was priced for, the session now holds our pincode.
+        if (pageContextOf(root)) sessionMoved = true;
 
         const trail = {
           status,
@@ -485,6 +572,11 @@ export async function fetchFlipkartPincodePricing(
           };
         }
 
+        // Priced for another location, or for none: its price and any "not
+        // deliverable" verdict belong to that location. This call has moved the
+        // session to our pincode, so the next one is priced for it.
+        if (applied !== pincode) continue;
+
         parsedResponses++;
 
         // (2) In stock, but the PRICING came from a seller that does not deliver
@@ -495,8 +587,8 @@ export async function fetchFlipkartPincodePricing(
           continue;
         }
 
-        // (3) Buyable and localised — the price counts once our pincode is confirmed.
-        if (detail && applied === pincode) {
+        // (3) Buyable and priced for our pincode — the price counts.
+        if (detail) {
           return {
             ...trail,
             pricing: { price: detail.price, mrp: detail.mrp, stockStatus: 'in_stock', pincode },

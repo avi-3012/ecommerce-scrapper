@@ -62,7 +62,11 @@ export class FlipkartAdapter implements MarketplaceAdapter {
         // Fail the check transiently — the last known price is preserved.
         // (An out-of-stock listing never lands here: it needs no pincode echo.)
         const why =
-          result.locationErrorCode ?? result.availability?.unserviceabilityReason ?? 'unverified';
+          result.applied && result.applied !== opts.pincode
+            ? `priced for ${result.applied}`
+            : (result.locationErrorCode ??
+              result.availability?.unserviceabilityReason ??
+              'unverified');
         throw new CheckError(
           'other',
           `Flipkart returned no price localized to pincode ${opts.pincode} after ${result.attempts} attempts (${why})`,

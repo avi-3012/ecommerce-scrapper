@@ -200,6 +200,45 @@ describe('FlipkartAdapter — a non-delivering seller never sets the price', () 
     expect(debug.pincode?.outOfStock).toBe(true);
   });
 
+  it('names the location a refused price was computed for', async () => {
+    // Current responses name their pricing location in the payments callout's
+    // link. Every answer here was priced for Bengaluru while we asked for
+    // Gurgaon: fail the check, and say where the price was from.
+    const bengaluru = JSON.stringify({
+      RESPONSE: {
+        pageData: {
+          pageContext: {
+            fdpEventTracking: {
+              events: {
+                psi: {
+                  pls: { isAvailable: true, availabilityStatus: 'IN_STOCK', isServiceable: true },
+                  ppd: { finalPrice: 131990, mrp: 228090 },
+                },
+              },
+            },
+          },
+        },
+        slots: [
+          {
+            widget: {
+              data: {
+                dlsData: {
+                  url: 'https://www.flipkart.com/item/payments-callout/itemId?pageKey=payments-callout&marketplace=Flipkart&pin=560001',
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+    mockedGot.mockResolvedValue(res(bengaluru));
+
+    const adapter = new FlipkartAdapter();
+    await expect(adapter.fetch(URL_, { session, pincode: '122004', pageFetch })).rejects.toThrow(
+      'Flipkart returned no price localized to pincode 122004 after 3 attempts (priced for 560001)',
+    );
+  });
+
   it('does NOT mark out of stock when only some attempts say so (transient)', async () => {
     // One "no delivering seller" response followed by a localised one is the
     // flapping case — it must resolve to the real price, not out of stock.
