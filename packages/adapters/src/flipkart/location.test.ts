@@ -547,6 +547,73 @@ describe('fetchFlipkartPincodePricing — the pincode takes effect one call late
     expect(result.attempts).toBe(1);
   });
 
+  describe('data centres', () => {
+    /** Flipkart's answer at the wrong data centre, as captured. */
+    const wrongDataCentre = (id: string) => {
+      const body = JSON.stringify({
+        RESPONSE: { id, dc: 'HYD' },
+        META_INFO: { dcInfo: { id, dc: 'HYD' } },
+        'REQUEST-ID': null,
+        ERROR_MESSAGE: 'DC Change',
+        REQUEST: null,
+        ERROR_CODE: 2000,
+        STATUS_CODE: 406,
+      });
+      return { statusCode: 406, body, rawBody: Buffer.from(body), headers: {} } as never;
+    };
+    const hosts = (): string[] =>
+      mockedFetch.mock.calls.map(
+        ([options]) => new URL((options as unknown as { url: string }).url).host,
+      );
+
+    it('follows "DC Change" to the session\'s data centre without spending an attempt', async () => {
+      // A session pinned to data centre 2 gets 406 for every call at 1. Two
+      // no-location answers after the move still leave the third for the price.
+      mockedFetch.mockResolvedValueOnce(wrongDataCentre('2'));
+      inTurn(noLocation, noLocation, localised);
+
+      const result = await fetchFlipkartPincodePricing(session, '/product/p/itm1?pid=P1', '122001');
+
+      expect(result.pricing?.price).toBe(139990);
+      expect(hosts()).toEqual([
+        '1.rome.api.flipkart.com',
+        '2.rome.api.flipkart.com',
+        '2.rome.api.flipkart.com',
+        '2.rome.api.flipkart.com',
+      ]);
+    });
+
+    it("goes straight to the identity's data centre on its next check", async () => {
+      mockedFetch.mockResolvedValueOnce(wrongDataCentre('2'));
+      inTurn(localised, localised);
+
+      await fetchFlipkartPincodePricing(session, '/product/p/itm1?pid=P1', '122001');
+      await fetchFlipkartPincodePricing(session, '/product/p/itm2?pid=P2', '122001');
+
+      expect(hosts()).toEqual([
+        '1.rome.api.flipkart.com',
+        '2.rome.api.flipkart.com',
+        '2.rome.api.flipkart.com',
+      ]);
+    });
+
+    it('moves once per check, never back and forth', async () => {
+      mockedFetch.mockResolvedValueOnce(wrongDataCentre('2'));
+      mockedFetch.mockResolvedValue(wrongDataCentre('1'));
+
+      const result = await fetchFlipkartPincodePricing(session, '/product/p/itm1?pid=P1', '122001');
+
+      expect(result.pricing).toBeNull();
+      expect(result.status).toBe(406);
+      expect(hosts()).toEqual([
+        '1.rome.api.flipkart.com',
+        '2.rome.api.flipkart.com',
+        '2.rome.api.flipkart.com',
+        '2.rome.api.flipkart.com',
+      ]);
+    });
+  });
+
   it('without a payments callout, trusts only a call this check has already moved', async () => {
     // Nothing on such a listing names the pricing location, so the first answer
     // may belong to wherever the session was. The second is priced for ours:

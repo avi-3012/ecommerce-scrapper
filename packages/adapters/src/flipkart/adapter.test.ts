@@ -239,6 +239,21 @@ describe('FlipkartAdapter — a non-delivering seller never sets the price', () 
     );
   });
 
+  it('names the HTTP status when Flipkart never answered with a page', async () => {
+    const refusal = JSON.stringify({ ERROR_MESSAGE: 'Not Acceptable', STATUS_CODE: 406 });
+    mockedGot.mockResolvedValue({
+      statusCode: 406,
+      body: refusal,
+      rawBody: Buffer.from(refusal),
+      headers: {},
+    } as never);
+
+    const adapter = new FlipkartAdapter();
+    await expect(adapter.fetch(URL_, { session, pincode: '122004', pageFetch })).rejects.toThrow(
+      'Flipkart returned no price localized to pincode 122004 after 3 attempts (HTTP 406)',
+    );
+  });
+
   it('does NOT mark out of stock when only some attempts say so (transient)', async () => {
     // One "no delivering seller" response followed by a localised one is the
     // flapping case — it must resolve to the real price, not out of stock.

@@ -452,6 +452,30 @@ function pricedPincodeOf(
 }
 
 /**
+ * The data centre each identity's session belongs to. Flipkart serves this API
+ * from more than one — `1.rome.api.flipkart.com`, `2.rome…`, and the product
+ * page preconnects to both — and pins a session to one of them. Asked at the
+ * wrong one, the API refuses every call with HTTP 406 and names the right one:
+ *
+ *   {"ERROR_MESSAGE":"DC Change","ERROR_CODE":2000,
+ *    "META_INFO":{"dcInfo":{"id":"2","dc":"HYD"}}, …}
+ *
+ * The site's own client moves there, and so do we. Kept in memory per identity,
+ * as a browser keeps it per profile: after a restart an identity's first call
+ * learns it again, at the cost of one 406.
+ */
+const dataCentres = new Map<string, string>();
+
+/** Where a 406 "DC Change" answer sends us, or null for any other answer. */
+function dataCentreMove(status: number, body: string): string | null {
+  if (status !== 406) return null;
+  const root = parseResponse(body) as Node | null;
+  if (root?.ERROR_MESSAGE !== 'DC Change') return null;
+  const id = ((root.META_INFO as Node)?.dcInfo as Node)?.id ?? (root.RESPONSE as Node)?.id;
+  return typeof id === 'string' && /^\d{1,2}$/.test(id) ? id : null;
+}
+
+/**
  * Fetch localized price/MRP/stock for a pincode via Flipkart's page/fetch API.
  *
  * Terminal answers, in this order:
@@ -497,6 +521,8 @@ export async function fetchFlipkartPincodePricing(
   // Whether an earlier call in this check was answered, and so has already
   // moved the session to our pincode.
   let sessionMoved = false;
+  let dataCentre = dataCentres.get(session.id) ?? '1';
+  let changedDataCentre = false;
   for (let attempt = 0; attempt < 3; attempt++) {
     attempts++;
     try {
@@ -505,7 +531,7 @@ export async function fetchFlipkartPincodePricing(
       // Flipkart's own client header and MUST echo the identity's UA — the old
       // hardcoded Chrome/126 string disagreed with every request it rode on.
       const res = await session.request(
-        'https://1.rome.api.flipkart.com/api/4/page/fetch?cacheFirst=false',
+        `https://${dataCentre}.rome.api.flipkart.com/api/4/page/fetch?cacheFirst=false`,
         {
           method: 'POST',
           kind: 'pincode_api',
@@ -531,6 +557,16 @@ export async function fetchFlipkartPincodePricing(
         },
       );
       status = res.statusCode;
+      // Sent to the session's own data centre: a redirect, not an answer, so it
+      // spends no attempt. Once per check; a second one would be a loop.
+      const move = dataCentreMove(res.statusCode, res.body);
+      if (move !== null && move !== dataCentre && !changedDataCentre) {
+        dataCentre = move;
+        changedDataCentre = true;
+        dataCentres.set(session.id, move);
+        attempt--;
+        continue;
+      }
       if (res.statusCode === 200) {
         const body = res.body;
         const root = parseResponse(body);

@@ -137,6 +137,16 @@ recorded only when Flipkart's response shows it was worked out for your
 pincode; the delivery box on the page only repeats the pincode that was asked
 for, so it proves nothing.
 
+Flipkart also assigns each identity to one of its data centres (1 or 2). Asked
+at the wrong one, its pricing service answers HTTP 406 "DC Change" to every
+call. The worker moves to the data centre Flipkart names, as the site itself
+does, and keeps using it for that identity, so this costs one extra call per
+identity after a restart.
+
+A product Flipkart marks as not buyable (for example "NoMatchingPlans", shown
+on the site as "Not deliverable at your location") is recorded as out of
+stock, keeping its last known price.
+
 ## Products whose page Flipkart cannot show
 
 Some listings fail on Flipkart's side: every request gets its "Something went

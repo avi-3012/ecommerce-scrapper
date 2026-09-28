@@ -66,7 +66,9 @@ export class FlipkartAdapter implements MarketplaceAdapter {
             ? `priced for ${result.applied}`
             : (result.locationErrorCode ??
               result.availability?.unserviceabilityReason ??
-              'unverified');
+              (result.status !== null && result.status !== 200
+                ? `HTTP ${result.status}`
+                : 'unverified'));
         throw new CheckError(
           'other',
           `Flipkart returned no price localized to pincode ${opts.pincode} after ${result.attempts} attempts (${why})`,
