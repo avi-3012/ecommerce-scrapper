@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import type { NextFunction, Request, Response } from 'express';
 import express from 'express';
 import { AppModule } from './app.module.js';
+import { allowLargeImportReviews } from './body-limits.js';
 import { loadConfig } from './config.js';
 
 async function bootstrap(): Promise<void> {
@@ -46,6 +47,10 @@ async function bootstrap(): Promise<void> {
     }
     next();
   });
+
+  // After the origin check, so a cross-site request is refused before a large
+  // body is read.
+  allowLargeImportReviews(app);
 
   // Serve the built SPA when present (staging/production topology, plan §2).
   const webDist = join(import.meta.dirname, '../../web/dist');
