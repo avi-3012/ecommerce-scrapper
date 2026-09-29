@@ -159,7 +159,20 @@ export class IdentityPool {
     if (this.persistTimer) return;
     const loaded = this.store.loadPool();
     if (loaded.identities.length === 0) return;
-    this.identities = loaded.identities;
+    // Update the identities in place rather than swap in the new copies. A
+    // check holds its identity from acquire to release — seconds, a minute
+    // through the browser — and every acquisition in that window re-reads the
+    // pool. Swapping left the running check holding an object the pool no
+    // longer had: its block, its cooling-off and its pacing were recorded on
+    // that orphan, then overwritten on disk by the untouched copy. On 28 Sep an
+    // Amazon identity blocked at 21:16 IST was back in service and blocked
+    // again four minutes later, and three identities blocked every evening
+    // never reached the three blocks in 24 h that retire one.
+    const held = new Map(this.identities.map((identity) => [identity.id, identity]));
+    this.identities = loaded.identities.map((fresh) => {
+      const current = held.get(fresh.id);
+      return current ? Object.assign(current, fresh) : fresh;
+    });
     this.meta = { ...emptyMeta(), ...loaded.meta };
   }
 

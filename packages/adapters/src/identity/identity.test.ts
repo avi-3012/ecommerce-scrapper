@@ -297,6 +297,66 @@ describe('pool selection', () => {
     expect(pool.list().map((i) => i.id)).not.toContain(identity.id);
   });
 
+  describe('an identity whose check was already running', () => {
+    // Two checks in flight, as there always are: acquiring for the second
+    // re-reads the pool from disk while the first still holds its identity.
+    // Whatever the first check then records has to land on the pool's own
+    // copy — on 28 Sep an identity blocked at 21:16 IST was back in service
+    // and blocked again four minutes later.
+    const daytime = Date.UTC(2026, 7, 21, 6, 0, 0);
+    const rig = () => {
+      const store = new IdentityStore(tempDir());
+      const pool = new IdentityPool(withPool(4, { rotation: 'per-request' }), store);
+      pool.ensureSize();
+      pool.flush();
+      const running = pool.acquire({ site: 'amazon.in', now: daytime })!;
+      const other = pool.acquire({ site: 'amazon.in', now: daytime })!; // re-reads the pool
+      return { store, pool, running, other };
+    };
+
+    it('stays out of service after it is blocked', () => {
+      const { store, pool, running, other } = rig();
+      pool.noteBlock(running, daytime);
+      pool.release(running);
+      pool.release(other);
+
+      expect(pool.byId(running.id)?.state).toBe('cooling');
+      expect(pool.eligible(daytime + 5 * 60_000).map((i) => i.id)).not.toContain(running.id);
+      // On disk too, where a restart reads it.
+      const reread = new IdentityPool(withPool(4, { rotation: 'per-request' }), store);
+      expect(reread.byId(running.id)?.state).toBe('cooling');
+    });
+
+    it('retires after three blocks in a day, each on a separate check', () => {
+      // The three Amazon identities blocked every evening were never retired:
+      // each block was recorded on a copy the pool had already replaced, so
+      // the count on disk never reached three.
+      const pool = new IdentityPool(withPool(1), new IdentityStore(tempDir()));
+      pool.ensureSize();
+      pool.flush();
+      const id = pool.list()[0]!.id;
+      let now = daytime;
+      for (let i = 0; i < 3; i++) {
+        const check = pool.acquire({ site: 'amazon.in', now })!;
+        expect(check.id).toBe(id);
+        // Another check asks for an identity meanwhile, re-reading the pool.
+        expect(pool.acquire({ site: 'amazon.in', now })).toBeNull();
+        pool.noteBlock(check, now);
+        pool.release(check);
+        now += 3 * 3_600_000; // past the longest cooling-off
+      }
+      expect(pool.list().map((i) => i.id)).not.toContain(id);
+    });
+
+    it('keeps its pacing', () => {
+      const { pool, running, other } = rig();
+      pool.noteOk(running, 'https://www.amazon.in/dp/X', daytime);
+      pool.release(running);
+      pool.release(other);
+      expect(pool.byId(running.id)?.lastRequestAt).toBe(daytime);
+    });
+  });
+
   it('keeps a product with the same identity most of the time, but not always', () => {
     const pool = new IdentityPool(withPool(8), new IdentityStore(tempDir()));
     pool.ensureSize();
