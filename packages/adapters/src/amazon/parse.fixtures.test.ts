@@ -219,6 +219,50 @@ describe('amazon fixture suite (WP-1.2)', () => {
     }
   });
 
+  describe('a listing Amazon has moved to a new ASIN', () => {
+    // As captured on 29 Sep 2026: /dp/B0GWQC4JGJ served B0G2BHDDB8's page, with
+    // the identical title, and B0GWQC4JGJ gone from the family's variants.
+    const TITLE =
+      'HP 14 Smartchoice, Intel Core Ultra 5 125H 12 TOPS, 24GB DDR5 (Upgradeable) 1TB SSD';
+    const page = (family: string[]): string => `<html><head>
+      <link rel="canonical" href="https://www.amazon.in/HP-Micro-Edge-Anti-Glare-Office24-ep1180TU/dp/B0G2BHDDB8">
+      </head><body>
+      <input type="hidden" id="ASIN" value="B0G2BHDDB8">
+      <span id="productTitle">  ${TITLE}  </span>
+      <script>var twister = { "currentAsin" : "B0G2BHDDB8", "landingAsin": "B0GWQC4JGJ",
+        "parentAsin" : "B0FN4K76WP",
+        "dimensionToAsinMap" : {${family.map((asin, i) => `"0_${i}_1":"${asin}"`).join(',')}} };</script>
+    </body></html>`;
+    const thrown = (html: string): CheckError => {
+      try {
+        parseAmazonPage(html, 'B0GWQC4JGJ');
+      } catch (err) {
+        return err as CheckError;
+      }
+      return expect.unreachable('should have thrown');
+    };
+
+    it('names the listing that replaced ours when ours has left the family', () => {
+      const err = thrown(page(['B0G2BHDDB8', 'B0GWQHQB4T', 'B0HHS5T6F6']));
+      expect(err.reason).toBe('parse_failed');
+      expect(err.escalate).toBe(false);
+      expect(err.movedTo).toEqual({
+        productId: 'B0G2BHDDB8',
+        canonicalUrl: 'https://www.amazon.in/dp/B0G2BHDDB8',
+        name: TITLE,
+      });
+      expect(err.message).toContain('now lists this product as B0G2BHDDB8');
+    });
+
+    it('never offers a sibling variant as a move', () => {
+      // Our ASIN is still in the family: Amazon is showing another variant in
+      // its place, which must keep failing rather than be tracked instead.
+      const err = thrown(page(['B0G2BHDDB8', 'B0GWQC4JGJ']));
+      expect(err.movedTo).toBeNull();
+      expect(err.message).toContain('(marketplace redirect)');
+    });
+  });
+
   it('never reads a sponsored carousel tile as the page ASIN', () => {
     // `[data-asin]` litters the recommendation strips. Taking the first one in
     // DOM order would report an unrelated product as a variant mismatch.

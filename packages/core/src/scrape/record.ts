@@ -1,5 +1,6 @@
 import type { PrismaClient, Product, Settings } from '@pricepulse/db';
 import { offersHash } from '@pricepulse/adapters';
+import type { MovedListing } from '@pricepulse/adapters';
 import type { Offer } from '@pricepulse/shared';
 import type { CheckOutcome } from './pipeline.js';
 import { evaluateAlerts } from '../alerts/engine.js';
@@ -62,6 +63,16 @@ export async function recordCheck(
   }
 
   if (!outcome.ok) {
+    // The marketplace has moved this product to a new listing id. Followed, it
+    // is not a failure of the product: its link changes and it is checked
+    // again at once. Not followed, the failure says why, so the fix is obvious.
+    let notFollowed: string | null = null;
+    if (outcome.error.movedTo) {
+      const moved = await followMovedListing(prisma, product, outcome, outcome.error.movedTo, now);
+      if (moved.followed) return { success: false, events: [], autoPaused: false, alertIds: [] };
+      notFollowed = moved.reason;
+    }
+
     const failures = product.consecutiveFailures + 1;
     const shouldAutoPause =
       failures >= settings.consecutiveFailureLimit && product.status === 'active';
@@ -73,7 +84,10 @@ export async function recordCheck(
           checkedAt: now,
           success: false,
           failureReason: outcome.error.reason,
-          failureDetail: outcome.error.message.slice(0, 500),
+          failureDetail: (notFollowed
+            ? `${outcome.error.message} — not switched automatically: ${notFollowed}`
+            : outcome.error.message
+          ).slice(0, 500),
           extractionTier: outcome.tier,
           durationMs: outcome.durationMs,
           stockStatus: 'unknown',
@@ -237,6 +251,99 @@ export async function recordCheck(
 
   const alertIds = results.slice(2).map((row) => (row as { id: string }).id);
   return { success: true, events, autoPaused: false, alertIds };
+}
+
+type FailedOutcome = Exclude<CheckOutcome, { ok: true }>;
+
+/**
+ * Point a product at the listing the marketplace moved it to — but only once
+ * the page proves it is the same product. The adapter has already ruled out a
+ * sibling variant; what is left to check is the title, which has to be the
+ * one this product last carried. The display name tracks the marketplace
+ * title on every successful check, so a product that was ever read has one to
+ * compare, and one that never was ("Awaiting first check") is not followed.
+ *
+ * The check still writes its history row, saying the link changed and when.
+ * It does not count against the failure budget, and the product is due again
+ * immediately, at its new link.
+ */
+async function followMovedListing(
+  prisma: PrismaClient,
+  product: Product,
+  outcome: FailedOutcome,
+  moved: MovedListing,
+  now: Date,
+): Promise<{ followed: true } | { followed: false; reason: string }> {
+  if (!sameTitle(moved.name, product.displayName)) {
+    return {
+      followed: false,
+      reason: `its title does not match this product's ("${moved.name.slice(0, 80)}")`,
+    };
+  }
+  const taken = await prisma.product.findUnique({
+    where: { userId_canonicalUrl: { userId: product.userId, canonicalUrl: moved.canonicalUrl } },
+    select: { id: true, displayName: true },
+  });
+  if (taken && taken.id !== product.id) {
+    return {
+      followed: false,
+      reason: `${moved.productId} is already tracked as "${taken.displayName.slice(0, 80)}"`,
+    };
+  }
+  const site = product.marketplace === 'flipkart' ? 'Flipkart' : 'Amazon';
+  try {
+    await prisma.$transaction([
+      prisma.priceHistory.create({
+        data: {
+          productId: product.id,
+          checkedAt: now,
+          success: false,
+          failureReason: outcome.error.reason,
+          failureDetail:
+            `Listing moved: ${site} now lists this product as ${moved.productId} ` +
+            `(was ${product.marketplaceProductId}); the link was updated automatically.`,
+          extractionTier: outcome.tier,
+          durationMs: outcome.durationMs,
+          stockStatus: 'unknown',
+          identityId: outcome.debug?.identityId ?? null,
+        },
+      }),
+      prisma.product.update({
+        where: { id: product.id },
+        data: {
+          url: moved.canonicalUrl,
+          canonicalUrl: moved.canonicalUrl,
+          marketplaceProductId: moved.productId,
+          consecutiveFailures: 0,
+          lastCheckedAt: now,
+          nextCheckAt: now,
+        },
+      }),
+    ]);
+  } catch (err) {
+    return {
+      followed: false,
+      reason: `the link could not be updated (${err instanceof Error ? err.message : String(err)})`,
+    };
+  }
+  console.log(
+    `[${product.marketplace}] listing moved: ${product.marketplaceProductId} → ${moved.productId} ` +
+      `("${product.displayName.slice(0, 60)}"); link updated`,
+  );
+  return { followed: true };
+}
+
+/** The same title, give or take case, spacing and invisible direction marks. */
+function sameTitle(a: string, b: string): boolean {
+  const norm = (s: string): string =>
+    s
+      .normalize('NFKC')
+      .replace(/[\u200B-\u200F\u202A-\u202E\u2060\uFEFF]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase();
+  const x = norm(a);
+  return x.length > 0 && x === norm(b);
 }
 
 /** The product's last-successful-check state, reconstructed from its snapshot columns. */

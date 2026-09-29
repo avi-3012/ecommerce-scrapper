@@ -1,6 +1,18 @@
 import type { FailureReason } from '@pricepulse/shared';
 
 /**
+ * Where a marketplace now lists a product we asked for by its old id: the
+ * listing it served instead, and the title that listing carries.
+ */
+export interface MovedListing {
+  /** The new marketplace product id (an ASIN). */
+  productId: string;
+  canonicalUrl: string;
+  /** The page's own title — how the caller confirms it is the same product. */
+  name: string;
+}
+
+/**
  * Every failure inside fetch/parse is thrown as a CheckError carrying a
  * category from the fixed failure taxonomy (Milestone 1 doc, WP-1.4).
  * The pipeline converts anything else to category 'other', so no check
@@ -35,15 +47,24 @@ export class CheckError extends Error {
    */
   readonly attempted: boolean;
 
+  /**
+   * Set when the marketplace answered our link with a different listing that
+   * has REPLACED ours, rather than with a sibling variant. Only a candidate:
+   * the adapter cannot know what the product was called, so the caller decides
+   * whether to follow it.
+   */
+  readonly movedTo: MovedListing | null;
+
   constructor(
     readonly reason: FailureReason,
     detail: string,
-    options: { escalate?: boolean; attempted?: boolean } = {},
+    options: { escalate?: boolean; attempted?: boolean; movedTo?: MovedListing | null } = {},
   ) {
     super(detail);
     this.name = 'CheckError';
     this.escalate = options.escalate ?? true;
     this.attempted = options.attempted ?? true;
+    this.movedTo = options.movedTo ?? null;
   }
 }
 

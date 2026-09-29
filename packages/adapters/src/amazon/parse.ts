@@ -2,6 +2,8 @@ import * as cheerio from 'cheerio';
 import type { ProductSnapshot, StockStatus } from '@pricepulse/shared';
 import { computeDiscountPct } from '@pricepulse/shared';
 import { CheckError } from '../errors.js';
+import type { MovedListing } from '../errors.js';
+import { recognizeAmazon } from './canonicalize.js';
 import { normalizeOfferCards } from '../offers.js';
 import { domOffers, hasUnexpandedMultiOfferCard, readInjectedOffers } from './offers.js';
 import { parseInrAmount } from '../money.js';
@@ -35,6 +37,52 @@ export function amazonOutOfStock(html: string): boolean {
   return OUT_OF_STOCK.test(cheerio.load(html)('#availability').text().trim().toLowerCase());
 }
 
+/**
+ * Whether Amazon has REPLACED the listing we asked for, rather than steered us
+ * to a sibling variant. Both arrive the same way — our ASIN in the URL, another
+ * one in the buy box — and only one of them may be followed: tracking a
+ * sibling would quietly swap a 24 GB laptop for the 16 GB one.
+ *
+ * The page's variation data says which. It lists every ASIN in the product
+ * family (`dimensionToAsinMap`), and when ours is still among them Amazon is
+ * showing a sibling in its place. When ours is gone from the family — as
+ * B0GWQC4JGJ was, served as B0G2BHDDB8 with the identical title — the listing
+ * has moved. A page with no variation data has no siblings to confuse it with.
+ *
+ * Returns the candidate with its title, or null for a sibling or a page with no
+ * title to confirm against. Following it is the caller's decision: only the
+ * caller knows what the product was called.
+ */
+function movedListing(
+  html: string,
+  expectedAsin: string,
+  pageAsin: string,
+  pageTitle: string,
+): MovedListing | null {
+  if (!pageTitle) return null;
+  const family = variantFamily(html);
+  if (family?.has(expectedAsin)) return null;
+  const recognition = recognizeAmazon(new URL(`https://www.amazon.in/dp/${pageAsin}`));
+  if (recognition.kind !== 'listing') return null;
+  return {
+    productId: recognition.productId,
+    canonicalUrl: recognition.canonicalUrl,
+    name: pageTitle,
+  };
+}
+
+/** Every ASIN in the page's product family, or null when it has no variation data. */
+function variantFamily(html: string): Set<string> | null {
+  const map = /"dimensionToAsinMap"\s*:\s*(\{[^}]*\})/.exec(html)?.[1];
+  if (!map) return null;
+  try {
+    const asins = Object.values(JSON.parse(map) as Record<string, unknown>);
+    return new Set(asins.filter((a): a is string => typeof a === 'string'));
+  } catch {
+    return null;
+  }
+}
+
 export function parseAmazonPage(html: string, expectedAsin?: string): ProductSnapshot {
   detectInterstitials(html);
 
@@ -62,10 +110,14 @@ export function parseAmazonPage(html: string, expectedAsin?: string): ProductSna
     // Not escalatable: Amazon redirected us to a different variant, and it
     // redirects a browser to that same variant. The retry would cost a browser
     // launch and an IP slot to arrive at this identical mismatch.
+    const moved = movedListing(html, expectedAsin, pageAsin, $('#productTitle').text().trim());
     throw new CheckError(
       'parse_failed',
-      `Page is for ASIN ${pageAsin}, expected ${expectedAsin} (marketplace redirect)`,
-      { escalate: false },
+      moved
+        ? `Page is for ASIN ${pageAsin}, expected ${expectedAsin} — Amazon now lists this ` +
+            `product as ${pageAsin}; ${expectedAsin} is no longer one of its variants`
+        : `Page is for ASIN ${pageAsin}, expected ${expectedAsin} (marketplace redirect)`,
+      { escalate: false, movedTo: moved },
     );
   }
 

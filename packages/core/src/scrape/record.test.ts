@@ -49,6 +49,100 @@ function stubPrisma(): { prisma: PrismaClient; update: ReturnType<typeof vi.fn> 
   return { prisma, update };
 }
 
+describe('recordCheck — a listing the marketplace moved', () => {
+  const NAME =
+    'HP 14 Smartchoice, Intel Core Ultra 5 125H 12 TOPS, 24GB DDR5 (Upgradeable) 1TB SSD';
+  const OLD = 'https://www.amazon.in/dp/B0GWQC4JGJ';
+  const NEW = 'https://www.amazon.in/dp/B0G2BHDDB8';
+  const movedTo = (name: string) =>
+    failure(
+      new CheckError('parse_failed', 'Page is for ASIN B0G2BHDDB8, expected B0GWQC4JGJ', {
+        escalate: false,
+        movedTo: { productId: 'B0G2BHDDB8', canonicalUrl: NEW, name },
+      }),
+    );
+  // 19 failures of a 20 limit: a check counted as a failure would auto-pause it.
+  const tracked = (over: Partial<Product> = {}) =>
+    product({
+      marketplace: 'amazon_in',
+      marketplaceProductId: 'B0GWQC4JGJ',
+      url: OLD,
+      canonicalUrl: OLD,
+      displayName: NAME,
+      ...over,
+    } as Partial<Product>);
+  const rig = (alreadyTracked: { id: string; displayName: string } | null = null) => {
+    const stub = stubPrisma();
+    Object.assign(stub.prisma.product, { findUnique: vi.fn().mockResolvedValue(alreadyTracked) });
+    return stub;
+  };
+  const detailOf = (prisma: PrismaClient): string =>
+    vi.mocked(prisma.priceHistory.create).mock.calls[0]![0].data.failureDetail as string;
+
+  it("follows it when the page carries this product's own title", async () => {
+    const { prisma, update } = rig();
+    const result = await recordCheck(prisma, tracked(), movedTo(NAME), settings, NOW);
+
+    expect(result.autoPaused).toBe(false);
+    expect(update.mock.calls[0]![0].data).toMatchObject({
+      url: NEW,
+      canonicalUrl: NEW,
+      marketplaceProductId: 'B0G2BHDDB8',
+      consecutiveFailures: 0,
+      nextCheckAt: NOW, // checked again at once, at the new link
+    });
+    // Still one history row for the check, saying what happened.
+    expect(detailOf(prisma)).toContain('now lists this product as B0G2BHDDB8');
+  });
+
+  it('matches the title through case, spacing and invisible direction marks', async () => {
+    const { prisma, update } = rig();
+    await recordCheck(
+      prisma,
+      tracked(),
+      movedTo(`  ${NAME.toUpperCase().replace(/ /g, '  ')}\u200E`),
+      settings,
+      NOW,
+    );
+    expect(update.mock.calls[0]![0].data.canonicalUrl).toBe(NEW);
+  });
+
+  it('does not follow a page with a different title, and says so', async () => {
+    const { prisma, update } = rig();
+    const result = await recordCheck(
+      prisma,
+      tracked(),
+      movedTo(NAME.replace('24GB', '16GB')),
+      settings,
+      NOW,
+    );
+
+    expect(result.autoPaused).toBe(true); // an ordinary failure, counted
+    expect(update.mock.calls[0]![0].data.canonicalUrl).toBeUndefined();
+    expect(detailOf(prisma)).toContain('not switched automatically: its title does not match');
+  });
+
+  it('does not follow a product that was never read', async () => {
+    const { prisma, update } = rig();
+    await recordCheck(
+      prisma,
+      tracked({ displayName: 'Awaiting first check — B0GWQC4JGJ' }),
+      movedTo(NAME),
+      settings,
+      NOW,
+    );
+    expect(update.mock.calls[0]![0].data.canonicalUrl).toBeUndefined();
+  });
+
+  it('does not take over a listing another product already tracks', async () => {
+    const { prisma, update } = rig({ id: 'p2', displayName: NAME });
+    await recordCheck(prisma, tracked(), movedTo(NAME), settings, NOW);
+
+    expect(update.mock.calls[0]![0].data.canonicalUrl).toBeUndefined();
+    expect(detailOf(prisma)).toContain('B0G2BHDDB8 is already tracked');
+  });
+});
+
 describe('recordCheck — checks that never made a request', () => {
   // The 3 Sep 2026 incident: a 107-second Amazon block put the connection into
   // a three-hour backoff, during which every due product was still dispatched
