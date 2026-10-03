@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { Badge, StockBadge } from './ui.js';
+import { PagerBar } from './components.js';
 import { alertSummary } from './pages/Dashboard.js';
 import type { AlertRow } from './api.js';
 
@@ -34,6 +35,40 @@ describe('alertSummary', () => {
   });
   it('describes back-in-stock', () => {
     expect(alertSummary(alert('back_in_stock', {}))).toContain('back in stock');
+  });
+});
+
+describe('pager bar', () => {
+  const bar = (page: number, pageSize: number, total: number): string =>
+    renderToStaticMarkup(
+      <PagerBar
+        page={page}
+        pageSize={pageSize}
+        total={total}
+        onPage={() => undefined}
+        onPageSize={() => undefined}
+      />,
+    );
+
+  it('says which rows these are, of how many, on which page', () => {
+    const html = bar(2, 200, 632);
+    expect(html).toContain('201–400');
+    expect(html).toContain('632');
+    expect(html).toContain('Page 2 of 4');
+  });
+
+  it('offers 25 to 200 a page, with the current size chosen', () => {
+    const html = bar(1, 200, 632);
+    for (const size of [25, 50, 100, 200]) expect(html).toContain(`<option value="${size}"`);
+    expect(html).toContain('<option value="200" selected="">');
+  });
+
+  it('ends the last page at the last row', () => {
+    expect(bar(4, 200, 632)).toContain('601–632');
+  });
+
+  it('stays out of the way of an empty list', () => {
+    expect(bar(1, 25, 0)).toBe('');
   });
 });
 

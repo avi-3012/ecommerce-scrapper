@@ -39,8 +39,24 @@ import {
   StatusBadge,
   StockBadge,
 } from '../ui.js';
-import { Pagination, PriceChange } from '../components.js';
+import { PAGE_SIZES, PagerBar, PriceChange } from '../components.js';
 import { CategoryManager } from '../CategoryManager.js';
+
+const PAGE_SIZE_KEY = 'pricepulse-products-page-size';
+
+/** The page size this browser last chose, or the smallest. */
+function storedPageSize(): number {
+  try {
+    const size = Number(localStorage.getItem(PAGE_SIZE_KEY));
+    return isPageSize(size) ? size : PAGE_SIZES[0];
+  } catch {
+    return PAGE_SIZES[0];
+  }
+}
+
+function isPageSize(size: number): boolean {
+  return (PAGE_SIZES as readonly number[]).includes(size);
+}
 
 export function ProductsPage(): JSX.Element {
   const [params, setParams] = useSearchParams();
@@ -50,13 +66,18 @@ export function ProductsPage(): JSX.Element {
   const [search, setSearch] = useState(params.get('search') ?? '');
   const [minPrice, setMinPrice] = useState(params.get('minPrice') ?? '');
   const [maxPrice, setMaxPrice] = useState(params.get('maxPrice') ?? '');
+  const [preferredPageSize, setPreferredPageSize] = useState(storedPageSize);
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const toast = useToast();
 
   // Search-as-you-type: debounce the URL write so we don't refetch on every keystroke.
+  // Skip when unchanged, so mounting a deep link (?search=…&page=3) keeps its page.
   useEffect(() => {
-    const handle = setTimeout(() => setFilter('search', search.trim()), 300);
+    const handle = setTimeout(() => {
+      if ((params.get('search') ?? '') === search.trim()) return;
+      setFilter('search', search.trim());
+    }, 300);
     return () => clearTimeout(handle);
   }, [search]);
 
@@ -84,7 +105,15 @@ export function ProductsPage(): JSX.Element {
     return () => clearTimeout(handle);
   }, [minPrice, maxPrice]);
 
-  const queryString = params.toString();
+  // The URL's page size when it names one, else this browser's last choice.
+  const pageSize = isPageSize(Number(params.get('pageSize')))
+    ? Number(params.get('pageSize'))
+    : preferredPageSize;
+  const apiParams = new URLSearchParams(params);
+  apiParams.set('pageSize', String(pageSize));
+  const queryString = apiParams.toString();
+  const hasFilters = [...params.keys()].some((key) => key !== 'page' && key !== 'pageSize');
+  const searching = (params.get('search') ?? '') !== '';
   const { data, isLoading, isPlaceholderData } = useQuery({
     queryKey: ['products', queryString],
     queryFn: () => api<Paged<Product>>(`/products?${queryString}`),
@@ -147,12 +176,13 @@ export function ProductsPage(): JSX.Element {
   function setFilter(key: string, value: string): void {
     const next = new URLSearchParams(params);
     setOrDelete(next, key, value);
+    // "Best match" only means something while searching.
+    if (key === 'search' && !value && next.get('sort') === 'relevance') next.delete('sort');
     if (key !== 'page') next.delete('page');
     setParams(next, { replace: true });
   }
 
-  const page = Number(params.get('page') ?? '1');
-  const totalPages = data ? Math.max(1, Math.ceil(data.total / data.pageSize)) : 1;
+  const page = Math.max(1, Math.floor(Number(params.get('page'))) || 1);
   const pendingId = action.isPending ? action.variables?.id : undefined;
 
   // Page changes push a history entry (Back returns to the previous page) and
@@ -162,6 +192,24 @@ export function ProductsPage(): JSX.Element {
     next.set('page', String(p));
     setParams(next);
     window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  // Keeps the first row on screen in view: rows 51–75 (page 3 at 25) are on
+  // page 1 at 200. Remembered per browser, so the next visit opens the same way.
+  function changePageSize(size: number): void {
+    const firstRow = (page - 1) * pageSize;
+    const next = new URLSearchParams(params);
+    next.set('pageSize', String(size));
+    const nextPage = Math.floor(firstRow / size) + 1;
+    if (nextPage > 1) next.set('page', String(nextPage));
+    else next.delete('page');
+    setParams(next, { replace: true });
+    setPreferredPageSize(size);
+    try {
+      localStorage.setItem(PAGE_SIZE_KEY, String(size));
+    } catch {
+      // Storage unavailable (private mode): the URL still carries the choice.
+    }
   }
 
   return (
@@ -200,7 +248,7 @@ export function ProductsPage(): JSX.Element {
       {/* Search + filters + sort (FR-5.3), URL-encoded so views are linkable */}
       <Card className="flex flex-wrap items-center gap-2 p-2.5">
         <input
-          placeholder="Search name or URL…"
+          placeholder="Search name, product ID or link…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className="h-9 min-w-52 flex-1 rounded-md border border-line-strong bg-card px-3 text-sm text-fg placeholder:text-fg-subtle focus:border-brand focus:outline-none"
@@ -258,9 +306,10 @@ export function ProductsPage(): JSX.Element {
           <option value="auto_paused">Auto-paused</option>
         </Select>
         <Select
-          value={params.get('sort') ?? 'recent'}
+          value={params.get('sort') ?? (searching ? 'relevance' : 'recent')}
           onChange={(e) => setFilter('sort', e.target.value)}
         >
+          {searching && <option value="relevance">Best match</option>}
           <option value="recent">Newest</option>
           <option value="recently_changed">Recently changed</option>
           <option value="biggest_drop">Biggest discount</option>
@@ -289,14 +338,14 @@ export function ProductsPage(): JSX.Element {
       ) : !data || data.items.length === 0 ? (
         <EmptyState
           icon={Package}
-          title={queryString ? 'No products match these filters' : 'No products tracked yet'}
+          title={hasFilters ? 'No products match these filters' : 'No products tracked yet'}
           hint={
-            queryString
+            hasFilters
               ? 'Try clearing the filters to see your whole catalogue.'
               : 'Paste an Amazon India or Flipkart listing URL to start monitoring.'
           }
           action={
-            queryString ? (
+            hasFilters ? (
               <Button
                 variant="secondary"
                 onClick={() => {
@@ -353,7 +402,15 @@ export function ProductsPage(): JSX.Element {
         </div>
       )}
 
-      <Pagination page={page} totalPages={totalPages} onPage={goToPage} />
+      {data && (
+        <PagerBar
+          page={page}
+          pageSize={data.pageSize}
+          total={data.total}
+          onPage={goToPage}
+          onPageSize={changePageSize}
+        />
+      )}
 
       <CategoryManager open={manageCategories} onClose={() => setManageCategories(false)} />
 

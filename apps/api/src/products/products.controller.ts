@@ -38,6 +38,7 @@ import type { Marketplace } from '@pricepulse/shared';
 import type { Prisma } from '@pricepulse/db';
 import { PrismaService } from '../prisma.service.js';
 import { JobsService } from '../jobs.service.js';
+import { rankMatches, searchTokens } from './fuzzy-search.js';
 import { loadScrapingConfigSafely } from '../scraping-config.js';
 import { parseBody } from '../validation.js';
 
@@ -100,11 +101,20 @@ const listQuerySchema = z.object({
   /** Current-price range (inclusive), in rupees. */
   minPrice: z.coerce.number().min(0).optional(),
   maxPrice: z.coerce.number().min(0).optional(),
+  /** Unset: best match while searching, newest otherwise. */
   sort: z
-    .enum(['recent', 'name', 'price_asc', 'price_desc', 'biggest_drop', 'recently_changed'])
-    .default('recent'),
+    .enum([
+      'relevance',
+      'recent',
+      'name',
+      'price_asc',
+      'price_desc',
+      'biggest_drop',
+      'recently_changed',
+    ])
+    .optional(),
   page: z.coerce.number().int().min(1).default(1),
-  pageSize: z.coerce.number().int().min(1).max(100).default(25),
+  pageSize: z.coerce.number().int().min(1).max(200).default(25),
 });
 
 const SORT_ORDER: Record<string, Prisma.ProductOrderByWithRelationInput> = {
@@ -259,15 +269,10 @@ export class ProductsController {
   @Get()
   async list(@Query() query: Record<string, string>) {
     const q = parseBody(listQuerySchema, query);
+    const tokens = searchTokens(q.search ?? '');
+    const searching = tokens.length > 0;
+    const sort = q.sort ?? (searching ? 'relevance' : 'recent');
     const where: Prisma.ProductWhereInput = {
-      ...(q.search
-        ? {
-            OR: [
-              { displayName: { contains: q.search, mode: 'insensitive' } },
-              { url: { contains: q.search, mode: 'insensitive' } },
-            ],
-          }
-        : {}),
       ...(q.marketplace ? { marketplace: q.marketplace } : {}),
       ...(q.tag ? { tags: { has: q.tag } } : {}),
       ...(q.category === 'none'
@@ -292,21 +297,62 @@ export class ProductsController {
           }
         : {}),
     };
-    const secondarySort: Prisma.ProductOrderByWithRelationInput = SORT_ORDER[q.sort] ?? {
+    const secondarySort: Prisma.ProductOrderByWithRelationInput = SORT_ORDER[sort] ?? {
       createdAt: 'desc',
     };
-    const [items, total] = await Promise.all([
-      this.prisma.product.findMany({
+    const skip = (q.page - 1) * q.pageSize;
+    const include = { category: { select: { id: true, name: true, color: true } } } as const;
+
+    let items: Array<Prisma.ProductGetPayload<{ include: typeof include }>>;
+    let total: number;
+    if (searching) {
+      // Matched here rather than in SQL: the search forgives word order and
+      // typos (see fuzzy-search.ts), which a LIKE cannot, and the filters above
+      // have already cut the candidates to one catalogue's worth.
+      const candidates = await this.prisma.product.findMany({
         where,
-        // Priority is always the primary key, highest first; the user's chosen
-        // sort breaks ties within a priority band.
-        orderBy: [{ priority: 'desc' }, secondarySort],
-        skip: (q.page - 1) * q.pageSize,
-        take: q.pageSize,
-        include: { category: { select: { id: true, name: true, color: true } } },
-      }),
-      this.prisma.product.count({ where }),
-    ]);
+        select: {
+          id: true,
+          displayName: true,
+          marketplaceProductId: true,
+          url: true,
+          priority: true,
+          createdAt: true,
+        },
+      });
+      const matches = rankMatches(candidates, tokens);
+      total = matches.length;
+      if (sort === 'relevance') {
+        const pageIds = matches.slice(skip, skip + q.pageSize).map((m) => m.id);
+        const rows = await this.prisma.product.findMany({
+          where: { id: { in: pageIds } },
+          include,
+        });
+        const byId = new Map(rows.map((row) => [row.id, row]));
+        items = pageIds.flatMap((id) => byId.get(id) ?? []);
+      } else {
+        items = await this.prisma.product.findMany({
+          where: { id: { in: matches.map((m) => m.id) } },
+          orderBy: [{ priority: 'desc' }, secondarySort],
+          skip,
+          take: q.pageSize,
+          include,
+        });
+      }
+    } else {
+      [items, total] = await Promise.all([
+        this.prisma.product.findMany({
+          where,
+          // Priority is always the primary key, highest first; the user's chosen
+          // sort breaks ties within a priority band.
+          orderBy: [{ priority: 'desc' }, secondarySort],
+          skip,
+          take: q.pageSize,
+          include,
+        }),
+        this.prisma.product.count({ where }),
+      ]);
+    }
     // Mark which rows the scraper is actually spending requests on. An active
     // product below the capacity line is never checked, and without this it
     // looks identical to one that is — the only visible difference would be a

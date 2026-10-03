@@ -1,7 +1,7 @@
 /** Shared composite components extracted to kill drift (resolves UI-UX-GAPS §6.2). */
-import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from 'lucide-react';
 import { inrDelta } from './api.js';
-import { IconButton } from './ui.js';
+import { IconButton, Select } from './ui.js';
 
 /** The PricePulse logo mark — a pulse/price wave in a rounded tile (resolves §1.1). */
 export function Logo({ size = 28 }: { size?: number }): JSX.Element {
@@ -60,6 +60,102 @@ export function Pagination({
         disabled={page >= totalPages}
         onClick={() => onPage(page + 1)}
       />
+    </div>
+  );
+}
+
+/** Page sizes offered where a long list is paged. */
+export const PAGE_SIZES = [25, 50, 100, 200] as const;
+
+/**
+ * A pager that stays on screen: which rows these are, how many there are in
+ * all, and how many to show at once. It rides the bottom of the viewport while
+ * the list scrolls — above the tab bar on a phone — and settles under the last
+ * row at the end of the page.
+ */
+export function PagerBar({
+  page,
+  pageSize,
+  total,
+  onPage,
+  onPageSize,
+}: {
+  page: number;
+  pageSize: number;
+  total: number;
+  onPage: (p: number) => void;
+  onPageSize: (size: number) => void;
+}): JSX.Element | null {
+  if (total === 0) return null;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const current = Math.min(Math.max(1, page), totalPages);
+  const first = (current - 1) * pageSize + 1;
+  const last = Math.min(current * pageSize, total);
+  // One row on a phone: the words and the first/last jumps only from `sm` up.
+  return (
+    <div className="sticky bottom-[4.25rem] z-20 md:bottom-4">
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 rounded-xl border border-line bg-card/90 px-3 py-1.5 text-sm text-fg-muted shadow-pop backdrop-blur sm:gap-x-4 sm:py-2">
+        <p className="nums whitespace-nowrap">
+          <span className="hidden sm:inline">Showing </span>
+          <span className="font-medium text-fg">
+            {first}–{last}
+          </span>{' '}
+          of <span className="font-medium text-fg">{total}</span>
+        </p>
+        <div className="flex items-center gap-0.5 sm:gap-1">
+          <span className="hidden sm:contents">
+            <IconButton
+              icon={ChevronsLeft}
+              label="First page"
+              disabled={current <= 1}
+              onClick={() => onPage(1)}
+            />
+          </span>
+          <IconButton
+            icon={ChevronLeft}
+            label="Previous page"
+            disabled={current <= 1}
+            onClick={() => onPage(current - 1)}
+          />
+          <span className="nums whitespace-nowrap px-1">
+            <span className="hidden sm:inline">
+              Page {current} of {totalPages}
+            </span>
+            <span className="sm:hidden">
+              {current} / {totalPages}
+            </span>
+          </span>
+          <IconButton
+            icon={ChevronRight}
+            label="Next page"
+            disabled={current >= totalPages}
+            onClick={() => onPage(current + 1)}
+          />
+          <span className="hidden sm:contents">
+            <IconButton
+              icon={ChevronsRight}
+              label="Last page"
+              disabled={current >= totalPages}
+              onClick={() => onPage(totalPages)}
+            />
+          </span>
+        </div>
+        <label className="flex items-center gap-2">
+          <span className="hidden sm:inline">Per page</span>
+          <Select
+            aria-label="Products per page"
+            value={pageSize}
+            onChange={(e) => onPageSize(Number(e.target.value))}
+            className="h-8"
+          >
+            {PAGE_SIZES.map((size) => (
+              <option key={size} value={size}>
+                {size}
+              </option>
+            ))}
+          </Select>
+        </label>
+      </div>
     </div>
   );
 }
