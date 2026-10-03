@@ -98,6 +98,11 @@ const listQuerySchema = z.object({
   stock: z.enum(STOCK_STATUSES).optional(),
   status: z.enum(PRODUCT_STATUSES).optional(),
   health: z.enum(['healthy', 'failing', 'auto_paused']).optional(),
+  /**
+   * Whether the product has had a successful check: 'done' leaves out the
+   * imported products still "Awaiting first check", 'pending' shows only them.
+   */
+  checked: z.enum(['done', 'pending']).optional(),
   /** Current-price range (inclusive), in rupees. */
   minPrice: z.coerce.number().min(0).optional(),
   maxPrice: z.coerce.number().min(0).optional(),
@@ -285,6 +290,10 @@ export class ProductsController {
       ...(q.health === 'auto_paused' ? { status: 'paused_auto' as const } : {}),
       ...(q.health === 'failing' ? { consecutiveFailures: { gt: 0 } } : {}),
       ...(q.health === 'healthy' ? { consecutiveFailures: 0, status: 'active' as const } : {}),
+      // A product added through the preview is recorded as checked on the spot;
+      // only an import waits, under its placeholder name, for its first success.
+      ...(q.checked === 'done' ? { lastSuccessAt: { not: null } } : {}),
+      ...(q.checked === 'pending' ? { lastSuccessAt: null } : {}),
       // Price range on the last known price. A product with no price yet
       // (null currentPrice) is excluded once either bound is set — it can't be
       // placed in a price band.

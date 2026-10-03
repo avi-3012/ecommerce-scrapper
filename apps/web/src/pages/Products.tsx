@@ -58,6 +58,24 @@ function isPageSize(size: number): boolean {
   return (PAGE_SIZES as readonly number[]).includes(size);
 }
 
+const CHECKED_KEY = 'pricepulse-products-checked';
+
+/** '' = every product; 'done' = first check done; 'pending' = awaiting it. */
+type CheckedFilter = '' | 'done' | 'pending';
+
+function asChecked(value: string | null): CheckedFilter {
+  return value === 'done' || value === 'pending' ? value : '';
+}
+
+/** Whether this browser last chose to hide (or show only) products awaiting a first check. */
+function storedChecked(): CheckedFilter {
+  try {
+    return asChecked(localStorage.getItem(CHECKED_KEY));
+  } catch {
+    return '';
+  }
+}
+
 export function ProductsPage(): JSX.Element {
   const [params, setParams] = useSearchParams();
   const [deleting, setDeleting] = useState<Product | null>(null);
@@ -67,6 +85,7 @@ export function ProductsPage(): JSX.Element {
   const [minPrice, setMinPrice] = useState(params.get('minPrice') ?? '');
   const [maxPrice, setMaxPrice] = useState(params.get('maxPrice') ?? '');
   const [preferredPageSize, setPreferredPageSize] = useState(storedPageSize);
+  const [preferredChecked, setPreferredChecked] = useState(storedChecked);
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const toast = useToast();
@@ -109,10 +128,16 @@ export function ProductsPage(): JSX.Element {
   const pageSize = isPageSize(Number(params.get('pageSize')))
     ? Number(params.get('pageSize'))
     : preferredPageSize;
+  // Likewise the first-check filter: a link's own choice, else this browser's.
+  const checked = params.has('checked') ? asChecked(params.get('checked')) : preferredChecked;
   const apiParams = new URLSearchParams(params);
   apiParams.set('pageSize', String(pageSize));
+  if (checked) apiParams.set('checked', checked);
+  else apiParams.delete('checked');
   const queryString = apiParams.toString();
-  const hasFilters = [...params.keys()].some((key) => key !== 'page' && key !== 'pageSize');
+  const hasFilters =
+    checked !== '' ||
+    [...params.keys()].some((key) => !['page', 'pageSize', 'checked'].includes(key));
   const searching = (params.get('search') ?? '') !== '';
   const { data, isLoading, isPlaceholderData } = useQuery({
     queryKey: ['products', queryString],
@@ -212,6 +237,18 @@ export function ProductsPage(): JSX.Element {
     }
   }
 
+  // Remembered like the page size: someone hiding the products still awaiting
+  // their first check wants them hidden next visit too.
+  function changeChecked(value: CheckedFilter): void {
+    setFilter('checked', value);
+    setPreferredChecked(value);
+    try {
+      localStorage.setItem(CHECKED_KEY, value);
+    } catch {
+      // Storage unavailable: the URL still carries the choice.
+    }
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -296,6 +333,11 @@ export function ProductsPage(): JSX.Element {
           <option value="in_stock">In stock</option>
           <option value="out_of_stock">Out of stock</option>
         </Select>
+        <Select value={checked} onChange={(e) => changeChecked(asChecked(e.target.value))}>
+          <option value="">All products</option>
+          <option value="done">First check done</option>
+          <option value="pending">Awaiting first check</option>
+        </Select>
         <Select
           value={params.get('health') ?? ''}
           onChange={(e) => setFilter('health', e.target.value)}
@@ -352,6 +394,12 @@ export function ProductsPage(): JSX.Element {
                   setSearch('');
                   setMinPrice('');
                   setMaxPrice('');
+                  setPreferredChecked('');
+                  try {
+                    localStorage.setItem(CHECKED_KEY, '');
+                  } catch {
+                    // Storage unavailable: nothing remembered to clear.
+                  }
                   setParams({}, { replace: true });
                 }}
               >
@@ -719,7 +767,13 @@ function ControlChips({
 
 function PriceBlock({ product }: { product: Product }): JSX.Element {
   if (product.currentPrice === null) {
-    return <p className="text-sm text-fg-subtle">awaiting first check</p>;
+    // Checked but never priced (out of stock since it was added) is not the
+    // same as never checked — and must not read like it under "First check done".
+    return (
+      <p className="text-sm text-fg-subtle">
+        {product.lastSuccessAt ? 'no price yet' : 'awaiting first check'}
+      </p>
+    );
   }
   return (
     <div>

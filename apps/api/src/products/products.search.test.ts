@@ -13,6 +13,7 @@ interface Row {
   priority: number;
   createdAt: Date;
   currentPrice: number | null;
+  lastSuccessAt: Date | null;
   category: null;
 }
 
@@ -28,6 +29,9 @@ function fakePrisma(rows: Row[]) {
     Object.entries(where).every(([key, value]) => {
       if (key === 'id' && value && typeof value === 'object' && 'in' in value) {
         return (value as { in: string[] }).in.includes(row.id);
+      }
+      if (value && typeof value === 'object' && 'not' in value) {
+        return row[key as keyof Row] !== (value as { not: unknown }).not;
       }
       return row[key as keyof Row] === value;
     });
@@ -80,6 +84,7 @@ const row = (id: string, displayName: string, over: Partial<Row> = {}): Row => (
   priority: 1,
   createdAt: at(1),
   currentPrice: 50_000,
+  lastSuccessAt: at(4),
   category: null,
   ...over,
 });
@@ -89,6 +94,12 @@ const catalogue = [
   row('exact', 'HP Victus 15 Gaming Laptop', { createdAt: at(1), currentPrice: 70_000 }),
   row('dell', 'Dell Inspiron 15', { createdAt: at(2) }),
   row('p2', 'HP Victus 16 Gaming Laptop', { priority: 2, currentPrice: 90_000 }),
+  // Imported, never yet read: placeholder name, no price, no successful check.
+  row('waiting', 'Awaiting first check — COMHG6XZUYVABCDE', {
+    createdAt: at(5),
+    currentPrice: null,
+    lastSuccessAt: null,
+  }),
 ];
 
 const list = (query: Record<string, string>) =>
@@ -116,8 +127,16 @@ describe('product list search', () => {
 
   it('lists everything, priority first, when not searching', async () => {
     const result = await list({});
-    expect(result.total).toBe(4);
-    expect(ids(result)).toEqual(['p2', 'typo', 'dell', 'exact']); // then newest
+    expect(result.total).toBe(5);
+    expect(ids(result)).toEqual(['p2', 'waiting', 'typo', 'dell', 'exact']); // then newest
+  });
+
+  it('leaves out products awaiting their first check, or shows only them', async () => {
+    const done = await list({ checked: 'done' });
+    expect(ids(done)).not.toContain('waiting');
+    expect(done.total).toBe(4);
+
+    expect(ids(await list({ checked: 'pending' }))).toEqual(['waiting']);
   });
 
   it('serves up to 200 a page', async () => {
