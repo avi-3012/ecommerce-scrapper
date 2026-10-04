@@ -115,17 +115,26 @@ Dashboard → **Settings** → **Flipkart**:
 
 Changes take effect on the next cycle; no restart.
 
-## Replacing a proxy
+## Adding or replacing a proxy
 
-Edit `config/scraping.flipkart.local.json` and restart only the Flipkart
+Edit `config/scraping.flipkart.local.json`: the `proxies` list, and in the same
+edit `identities.count` at about 12 per proxy. Then restart only the Flipkart
 worker — the Amazon worker is untouched:
 
 ```bash
-$C up -d worker-flipkart
+$C restart worker-flipkart
 ```
 
-Identities bound to a removed proxy are re-homed onto the remaining ones over
-a few minutes; identities for a new proxy are created gradually.
+`restart`, not `up -d`: the worker reads the file once, at startup, and compose
+does not recreate a container because a file it mounts has changed, so `up -d`
+leaves the old list running.
+
+Raise the count with the list. A larger count is filled two identities a
+minute, each on the least-used proxy, so a new proxy fills in a quarter of an
+hour and the identities already working stay where they are. Adding a proxy
+without raising the count makes room the other way, by retiring established
+identities to move them. Identities bound to a removed proxy are re-homed onto
+the remaining ones over a few minutes.
 
 ## Pincode pricing
 
