@@ -63,6 +63,12 @@ export interface PipelineOptions {
   pincode?: string | null;
   /** The last price we accepted for this product, for the 40%-jump check. */
   lastAcceptedPrice?: number | null;
+  /**
+   * A step taken before the product page, as part of the same check — the
+   * search a person would run first. Inside the check so that a block there
+   * ends it as a block, recorded and audited, before the product is fetched.
+   */
+  approach?: () => Promise<unknown>;
 }
 
 /**
@@ -215,6 +221,7 @@ async function fetchAndParse(
   options: PipelineOptions,
   debug: ScrapeDebug,
 ): Promise<ProductSnapshot> {
+  if (options.approach) await options.approach();
   const page = await adapter.fetch(canonicalUrl, {
     session: options.session,
     pincode: options.pincode,

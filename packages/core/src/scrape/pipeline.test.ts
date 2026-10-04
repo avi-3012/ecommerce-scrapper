@@ -175,6 +175,53 @@ describe('performCheck tier-2 escalation', () => {
   });
 });
 
+describe('performCheck with a search first', () => {
+  const adapterReturning = () => {
+    const fetch = vi.fn(async (url: string) => ({
+      url,
+      body: '<html></html>',
+      tier: 'http' as const,
+      fetchedAt: new Date(),
+    }));
+    const adapter = {
+      marketplace: 'flipkart',
+      domains: ['flipkart.com'],
+      recognize: vi.fn(),
+      fetch,
+      parse: vi.fn(() => snapshot(114990)),
+    } as unknown as MarketplaceAdapter;
+    return { adapter, fetch };
+  };
+
+  it('ends as a block, without fetching the product, when the search was blocked', async () => {
+    const { adapter, fetch } = adapterReturning();
+    const outcome = await performCheck(adapter, 'https://www.flipkart.com/p/itm1', {
+      session: session(),
+      browserFetch,
+      approach: async () => {
+        throw new CheckError('fetch_blocked', 'Search blocked on flipkart.com: HTTP 429');
+      },
+    });
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.classification).toBe('blocked');
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('goes on to the product after a search that went through', async () => {
+    const { adapter, fetch } = adapterReturning();
+    const approach = vi.fn(async () => true);
+    const outcome = await performCheck(adapter, 'https://www.flipkart.com/p/itm1', {
+      session: session(),
+      approach,
+    });
+
+    expect(approach).toHaveBeenCalledOnce();
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(outcome.ok).toBe(true);
+  });
+});
+
 describe('performCheck suspicion', () => {
   /** An adapter whose tier-1 succeeds and returns whatever snapshot is given. */
   function okAdapter(parsed: ProductSnapshot): MarketplaceAdapter {

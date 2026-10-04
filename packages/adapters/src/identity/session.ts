@@ -560,30 +560,47 @@ export class IdentitySession {
    * price — volume is what gets metered — so it is applied to a fraction of
    * checks rather than all of them.
    *
-   * Best-effort: a failed approach must never fail the check it precedes.
+   * Best-effort: a search that fails — a timeout, a network error — must never
+   * fail the check it precedes. A search the marketplace BLOCKS is different:
+   * it throws, so the check ends there instead of carrying the refused
+   * identity on to the product page.
    */
   async approachViaSearch(site: string, keywords: string, debug?: ScrapeDebug): Promise<boolean> {
     if (!keywords) return false;
+    let response: SessionResponse;
     try {
-      const url = searchUrl(site, keywords);
-      const response = await this.request(url, { kind: 'noise', debug, navigation: true });
-      const verdict = classifyResponse({
-        marketplace: this.marketplace,
-        status: response.statusCode,
-        body: response.body,
-        expectProduct: false,
+      response = await this.request(searchUrl(site, keywords), {
+        kind: 'noise',
+        debug,
+        navigation: true,
       });
-      if (verdict.classification === 'hard_block') {
-        this.recordBlock(response, verdict.reason, verdict.detail);
-        return false;
-      }
-      // The product fetch will now carry this as its Referer automatically.
-      this.identity.lastUrlBySite[site] = response.url;
-      this.pool.noteOk(this.identity, response.url);
-      return true;
     } catch {
+      // A search that merely failed costs nothing: go straight to the product.
       return false;
     }
+    const verdict = classifyResponse({
+      marketplace: this.marketplace,
+      status: response.statusCode,
+      body: response.body,
+      expectProduct: false,
+    });
+    if (verdict.classification === 'hard_block') {
+      this.recordBlock(response, verdict.reason, verdict.detail);
+      // A block ends the check here, as it does in the warm-up. Going on to
+      // the product page would show the marketplace the identity it just
+      // refused, seconds later — on 4 Oct an Amazon identity blocked on the
+      // search page at 07:02:01 was blocked again on the product at 07:02:36,
+      // and the second block cut the address's rate a second time.
+      const captcha = /captcha|robot_check/.test(verdict.reason);
+      throw new CheckError(
+        captcha ? 'captcha' : 'fetch_blocked',
+        `Search blocked on ${site}: ${verdict.detail}`,
+      );
+    }
+    // The product fetch will now carry this as its Referer automatically.
+    this.identity.lastUrlBySite[site] = response.url;
+    this.pool.noteOk(this.identity, response.url);
+    return true;
   }
 
   /**

@@ -86,16 +86,19 @@ export class CheckRunnerService {
     // Some checks arrive the way a person would: via a search for the product's
     // own name, so the product page is a click from results rather than a bare
     // deep link. Costs one extra request, so only a fraction of checks do it.
-    if (Math.random() < this.identities.config.funnelRatio) {
-      const site = product.marketplace === 'amazon_in' ? 'amazon.in' : 'flipkart.com';
-      await session.approachViaSearch(site, searchKeywords(product.displayName));
-    }
+    // Run as part of the check, so a block on the search ends the check there.
+    const site = product.marketplace === 'amazon_in' ? 'amazon.in' : 'flipkart.com';
+    const approach =
+      Math.random() < this.identities.config.funnelRatio
+        ? () => session.approachViaSearch(site, searchKeywords(product.displayName))
+        : undefined;
 
     const outcome = await performCheck(adapter, product.canonicalUrl, {
       session,
       browserFetch: this.identities.browserFetchFor(session.identity),
       pincode: settings.pincode,
       lastAcceptedPrice: product.currentPrice === null ? null : Number(product.currentPrice),
+      approach,
     });
 
     // The audit row is written for EVERY outcome, suspects included — it is the
