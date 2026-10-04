@@ -62,6 +62,11 @@ function fakePrisma(rows: Row[]) {
       findMany,
       count: async (args: { where?: Record<string, unknown> }) =>
         rows.filter((row) => matches(row, args.where)).length,
+      updateMany: async (args: { where?: Record<string, unknown>; data: Partial<Row> }) => {
+        const hit = rows.filter((row) => matches(row, args.where));
+        for (const row of hit) Object.assign(row, args.data);
+        return { count: hit.length };
+      },
     },
     user: {
       findFirst: async () => ({
@@ -142,5 +147,53 @@ describe('product list search', () => {
   it('serves up to 200 a page', async () => {
     expect((await list({ pageSize: '200' })).pageSize).toBe(200);
     await expect(list({ pageSize: '201' })).rejects.toThrow('Validation failed');
+  });
+});
+
+describe('select all matching', () => {
+  const matching = (query: Record<string, string>) =>
+    new ProductsController(fakePrisma(catalogue), {} as JobsService).ids(query);
+
+  it('returns every product the search matches, not just one page of them', async () => {
+    const result = await matching({ search: 'victus', pageSize: '1' });
+    expect(result.total).toBe(3);
+    expect([...result.ids].sort()).toEqual(['exact', 'p2', 'typo']);
+  });
+
+  it('applies the same filters as the list', async () => {
+    expect(await matching({ checked: 'pending' })).toEqual({ ids: ['waiting'], total: 1 });
+  });
+});
+
+describe('bulk priority', () => {
+  const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+  const fresh = () => [
+    row(id(1), 'Acer Aspire Lite', { createdAt: at(1) }),
+    row(id(2), 'Dell Inspiron 15', { createdAt: at(2) }),
+    row(id(3), 'HP Victus 15', { createdAt: at(3) }),
+  ];
+
+  it('sets one priority on every selected product, which then leads the list', async () => {
+    const controller = new ProductsController(fakePrisma(fresh()), {} as JobsService);
+
+    expect(await controller.setPriority({ ids: [id(1), id(2)], priority: 5 })).toEqual({
+      updated: 2,
+    });
+    // The two at P5 first (newest first between them), then the one left at P1.
+    expect(ids(await controller.list({}))).toEqual([id(2), id(1), id(3)]);
+  });
+
+  it('refuses an empty selection, a priority below 1, and over 1,000 at once', async () => {
+    const controller = new ProductsController(fakePrisma(fresh()), {} as JobsService);
+    await expect(controller.setPriority({ ids: [], priority: 2 })).rejects.toThrow(
+      'Validation failed',
+    );
+    await expect(controller.setPriority({ ids: [id(1)], priority: 0 })).rejects.toThrow(
+      'Validation failed',
+    );
+    const tooMany = Array.from({ length: 1_001 }, (_, n) => id(n + 1));
+    await expect(controller.setPriority({ ids: tooMany, priority: 2 })).rejects.toThrow(
+      'Validation failed',
+    );
   });
 });

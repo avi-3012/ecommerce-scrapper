@@ -1,4 +1,6 @@
 /** Shared composite components extracted to kill drift (resolves UI-UX-GAPS §6.2). */
+import { useEffect, useRef } from 'react';
+import type { ReactNode } from 'react';
 import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from 'lucide-react';
 import { inrDelta } from './api.js';
 import { IconButton, Select } from './ui.js';
@@ -79,12 +81,18 @@ export function PagerBar({
   total,
   onPage,
   onPageSize,
+  leading,
+  children,
 }: {
   page: number;
   pageSize: number;
   total: number;
   onPage: (p: number) => void;
   onPageSize: (size: number) => void;
+  /** Placed before the row count — e.g. a select-this-page checkbox. */
+  leading?: ReactNode;
+  /** A row above the pager in the same bar — e.g. what to do with a selection. */
+  children?: ReactNode;
 }): JSX.Element | null {
   if (total === 0) return null;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
@@ -94,69 +102,111 @@ export function PagerBar({
   // One row on a phone: the words and the first/last jumps only from `sm` up.
   return (
     <div className="sticky bottom-[4.25rem] z-20 md:bottom-4">
-      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 rounded-xl border border-line bg-card/90 px-3 py-1.5 text-sm text-fg-muted shadow-pop backdrop-blur sm:gap-x-4 sm:py-2">
-        <p className="nums whitespace-nowrap">
-          <span className="hidden sm:inline">Showing </span>
-          <span className="font-medium text-fg">
-            {first}–{last}
-          </span>{' '}
-          of <span className="font-medium text-fg">{total}</span>
-        </p>
-        <div className="flex items-center gap-0.5 sm:gap-1">
-          <span className="hidden sm:contents">
+      <div className="rounded-xl border border-line bg-card/90 text-sm text-fg-muted shadow-pop backdrop-blur">
+        {children && <div className="border-b border-line px-3 py-2">{children}</div>}
+        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-3 py-1.5 sm:gap-x-4 sm:py-2">
+          <div className="flex items-center gap-3">
+            {leading}
+            <p className="nums whitespace-nowrap">
+              <span className="hidden sm:inline">Showing </span>
+              <span className="font-medium text-fg">
+                {first}–{last}
+              </span>{' '}
+              of <span className="font-medium text-fg">{total}</span>
+            </p>
+          </div>
+          <div className="flex items-center gap-0.5 sm:gap-1">
+            <span className="hidden sm:contents">
+              <IconButton
+                icon={ChevronsLeft}
+                label="First page"
+                disabled={current <= 1}
+                onClick={() => onPage(1)}
+              />
+            </span>
             <IconButton
-              icon={ChevronsLeft}
-              label="First page"
+              icon={ChevronLeft}
+              label="Previous page"
               disabled={current <= 1}
-              onClick={() => onPage(1)}
+              onClick={() => onPage(current - 1)}
             />
-          </span>
-          <IconButton
-            icon={ChevronLeft}
-            label="Previous page"
-            disabled={current <= 1}
-            onClick={() => onPage(current - 1)}
-          />
-          <span className="nums whitespace-nowrap px-1">
-            <span className="hidden sm:inline">
-              Page {current} of {totalPages}
+            <span className="nums whitespace-nowrap px-1">
+              <span className="hidden sm:inline">
+                Page {current} of {totalPages}
+              </span>
+              <span className="sm:hidden">
+                {current} / {totalPages}
+              </span>
             </span>
-            <span className="sm:hidden">
-              {current} / {totalPages}
-            </span>
-          </span>
-          <IconButton
-            icon={ChevronRight}
-            label="Next page"
-            disabled={current >= totalPages}
-            onClick={() => onPage(current + 1)}
-          />
-          <span className="hidden sm:contents">
             <IconButton
-              icon={ChevronsRight}
-              label="Last page"
+              icon={ChevronRight}
+              label="Next page"
               disabled={current >= totalPages}
-              onClick={() => onPage(totalPages)}
+              onClick={() => onPage(current + 1)}
             />
-          </span>
+            <span className="hidden sm:contents">
+              <IconButton
+                icon={ChevronsRight}
+                label="Last page"
+                disabled={current >= totalPages}
+                onClick={() => onPage(totalPages)}
+              />
+            </span>
+          </div>
+          <label className="flex items-center gap-2">
+            <span className="hidden sm:inline">Per page</span>
+            <Select
+              aria-label="Products per page"
+              value={pageSize}
+              onChange={(e) => onPageSize(Number(e.target.value))}
+              className="h-8"
+            >
+              {PAGE_SIZES.map((size) => (
+                <option key={size} value={size}>
+                  {size}
+                </option>
+              ))}
+            </Select>
+          </label>
         </div>
-        <label className="flex items-center gap-2">
-          <span className="hidden sm:inline">Per page</span>
-          <Select
-            aria-label="Products per page"
-            value={pageSize}
-            onChange={(e) => onPageSize(Number(e.target.value))}
-            className="h-8"
-          >
-            {PAGE_SIZES.map((size) => (
-              <option key={size} value={size}>
-                {size}
-              </option>
-            ))}
-          </Select>
-        </label>
       </div>
     </div>
+  );
+}
+
+/**
+ * A checkbox that can also say "some": checked when all of a set is selected,
+ * mixed when part of it is. A native input, so it keeps the keyboard and
+ * screen-reader behaviour of one.
+ */
+export function TriStateCheckbox({
+  checked,
+  mixed = false,
+  label,
+  onChange,
+  className = '',
+}: {
+  checked: boolean;
+  mixed?: boolean;
+  label: string;
+  onChange: () => void;
+  className?: string;
+}): JSX.Element {
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = mixed && !checked;
+  }, [mixed, checked]);
+  return (
+    <input
+      ref={ref}
+      type="checkbox"
+      aria-label={label}
+      title={label}
+      checked={checked}
+      onChange={onChange}
+      onClick={(e) => e.stopPropagation()}
+      className={`size-4 shrink-0 cursor-pointer accent-brand ${className}`}
+    />
   );
 }
 

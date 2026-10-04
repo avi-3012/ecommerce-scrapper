@@ -84,6 +84,37 @@ describe('product hard cap', () => {
     ).rejects.toBeInstanceOf(ProductLimitError);
   });
 
+  it('stores the priority it was given, and leaves the default when none is', async () => {
+    // The add page's priority field used to be accepted by the API and then
+    // dropped here. What follows the write is recordCheck's business, tested on
+    // its own, so this stub stops at the row being created.
+    const created: Array<Record<string, unknown>> = [];
+    const d = deps(0);
+    Object.assign(d.prisma, {
+      user: { findFirst: vi.fn().mockResolvedValue({ id: 'u1', settings: {} }) },
+      product: {
+        count: vi.fn().mockResolvedValue(0),
+        create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
+          created.push(data);
+          throw new Error('stop after the write');
+        }),
+      },
+    });
+    const params = {
+      url: 'https://www.amazon.in/dp/B0TEST00001',
+      canonicalUrl: 'https://www.amazon.in/dp/B0TEST00001',
+      marketplace: 'amazon_in' as const,
+      marketplaceProductId: 'B0TEST00001',
+      snapshot: { name: 'HP Victus 15' } as never,
+    };
+
+    await registerProduct(d, { ...params, priority: 3 }).catch(() => undefined);
+    await registerProduct(d, params).catch(() => undefined);
+
+    expect(created[0]!.priority).toBe(3);
+    expect('priority' in created[1]!).toBe(false);
+  });
+
   it('carries the numbers on the error, so the API can explain itself', async () => {
     const err = new ProductLimitError(50, 50);
     expect(err.maxProducts).toBe(50);

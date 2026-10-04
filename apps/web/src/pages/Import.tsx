@@ -2,10 +2,10 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { CheckCircle2, Download, Upload } from 'lucide-react';
-import { api, errorMessage, relTime } from '../api.js';
+import { api, errorMessage, parsePriority, relTime } from '../api.js';
 import type { ImportReview } from '../api.js';
 import { useToast } from '../toast.js';
-import { Button, Card, ErrorNote, Spinner } from '../ui.js';
+import { Button, Card, ErrorNote, Field, Input, Spinner } from '../ui.js';
 
 interface Batch {
   id: string;
@@ -23,8 +23,10 @@ export function ImportPage(): JSX.Element {
   const toast = useToast();
   const [review, setReview] = useState<ImportReview | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<{ imported: number } | null>(null);
+  const [result, setResult] = useState<{ imported: number; priority: number } | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [priority, setPriority] = useState('1');
+  const priorityValue = parsePriority(priority);
 
   const { data: batches } = useQuery({
     queryKey: ['import-batches'],
@@ -45,13 +47,19 @@ export function ImportPage(): JSX.Element {
     onError: (err) => setError(errorMessage(err)),
   });
 
+  // Every product the file brings in gets the priority typed on the review.
   const execute = useMutation({
-    mutationFn: (r: ImportReview) =>
-      api<{ imported: number }>('/import/execute', { method: 'POST', body: JSON.stringify(r) }),
+    mutationFn: async ({ r, priority }: { r: ImportReview; priority: number }) => {
+      const done = await api<{ imported: number }>('/import/execute', {
+        method: 'POST',
+        body: JSON.stringify({ ...r, priority }),
+      });
+      return { ...done, priority };
+    },
     onSuccess: (r) => {
       setResult(r);
       setReview(null);
-      toast.success(`Imported ${r.imported} products.`);
+      toast.success(`Imported ${r.imported} products at priority P${r.priority}.`);
       void queryClient.invalidateQueries({ queryKey: ['import-batches'] });
       void queryClient.invalidateQueries({ queryKey: ['products'] });
     },
@@ -125,8 +133,8 @@ export function ImportPage(): JSX.Element {
         <Card className="flex items-start gap-3 border-success/40 bg-success-subtle p-4 text-sm text-success-fg">
           <CheckCircle2 className="mt-0.5 size-5 shrink-0" aria-hidden />
           <p>
-            Imported {result.imported} products. First checks run at a polite pace — new products
-            show <i>awaiting first check</i> until their turn.{' '}
+            Imported {result.imported} products at priority P{result.priority}. First checks run at
+            a polite pace — new products show <i>awaiting first check</i> until their turn.{' '}
             <Link to="/products" className="underline">
               View products
             </Link>
@@ -181,18 +189,43 @@ export function ImportPage(): JSX.Element {
             </details>
           )}
 
-          <div className="mt-4 flex justify-end gap-2">
-            <Button variant="secondary" onClick={() => setReview(null)}>
-              Cancel
-            </Button>
-            <Button
-              variant="primary"
-              disabled={review.valid.length === 0}
-              loading={execute.isPending}
-              onClick={() => execute.mutate(review)}
-            >
-              Import {review.valid.length} products
-            </Button>
+          <div className="mt-4 flex flex-wrap items-end justify-between gap-3">
+            <div className="w-full sm:w-72">
+              <Field
+                label="Priority for these products"
+                hint={
+                  priorityValue === null
+                    ? 'Enter a whole number from 1 upward.'
+                    : `All ${review.valid.length} get this. Higher is checked first — 2 goes before 1.`
+                }
+              >
+                <Input
+                  type="number"
+                  inputMode="numeric"
+                  min="1"
+                  max="1000000"
+                  step="1"
+                  value={priority}
+                  aria-invalid={priorityValue === null}
+                  onChange={(e) => setPriority(e.target.value)}
+                />
+              </Field>
+            </div>
+            <div className="flex gap-2">
+              <Button variant="secondary" onClick={() => setReview(null)}>
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                disabled={review.valid.length === 0 || priorityValue === null}
+                loading={execute.isPending}
+                onClick={() =>
+                  priorityValue !== null && execute.mutate({ r: review, priority: priorityValue })
+                }
+              >
+                Import {review.valid.length} products
+              </Button>
+            </div>
           </div>
         </Card>
       )}

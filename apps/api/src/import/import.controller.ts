@@ -33,11 +33,24 @@ export class ImportController {
   }
 
   @Post('execute')
-  async execute(@Body() review: ImportReview) {
-    if (!review || !Array.isArray(review.valid)) {
+  async execute(@Body() body: ImportReview & { priority?: unknown }) {
+    if (!body || !Array.isArray(body.valid)) {
       throw new BadRequestException('Body must be the review returned by /import/validate');
     }
-    return this.importService.execute(review);
+    // One priority for every product this file brings in, typed on the review
+    // screen. Absent, they take the default like any new product.
+    const { priority, ...review } = body;
+    if (
+      priority !== undefined &&
+      !(
+        Number.isInteger(priority) &&
+        (priority as number) >= 1 &&
+        (priority as number) <= 1_000_000
+      )
+    ) {
+      throw new BadRequestException('Priority must be a whole number from 1 to 1,000,000');
+    }
+    return this.importService.execute(review, priority as number | undefined);
   }
 
   @Get()

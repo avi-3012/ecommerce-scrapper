@@ -236,7 +236,11 @@ export class ImportService {
    * the first checks (WP-2.9 rules 4–5). Import success = registration
    * success; fetch health is monitoring's ongoing job.
    */
-  async execute(review: ImportReview): Promise<{ batchId: string; imported: number }> {
+  async execute(
+    review: ImportReview,
+    /** Given to every product created; the column default (1) when absent. */
+    priority?: number,
+  ): Promise<{ batchId: string; imported: number }> {
     const { user } = await getUserWithSettings(this.prisma);
     let imported = 0;
     const now = Date.now();
@@ -273,6 +277,7 @@ export class ImportService {
             dropThresholdPct: row.dropThresholdPct ?? null,
             notes: row.notes ?? '',
             tags: row.tags ?? [],
+            ...(priority !== undefined ? { priority } : {}),
             status: 'active',
             nextCheckAt: new Date(now + i * STAGGER_SECONDS * 1000),
           },

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { Badge, StockBadge } from './ui.js';
 import { PagerBar } from './components.js';
+import { parsePriority } from './api.js';
 import { alertSummary } from './pages/Dashboard.js';
 import type { AlertRow } from './api.js';
 
@@ -69,6 +70,20 @@ describe('pager bar', () => {
 
   it('stays out of the way of an empty list', () => {
     expect(bar(1, 25, 0)).toBe('');
+  });
+});
+
+describe('parsePriority', () => {
+  it('takes a whole number from 1 up', () => {
+    expect(parsePriority('1')).toBe(1);
+    expect(parsePriority(' 25 ')).toBe(25);
+    expect(parsePriority('1000000')).toBe(1_000_000);
+  });
+
+  it('refuses anything else, rather than guessing', () => {
+    for (const text of ['', '0', '-2', '2.5', 'two', '1000001']) {
+      expect(parsePriority(text)).toBeNull();
+    }
   });
 });
 

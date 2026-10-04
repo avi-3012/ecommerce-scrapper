@@ -122,6 +122,18 @@ const listQuerySchema = z.object({
   pageSize: z.coerce.number().int().min(1).max(200).default(25),
 });
 
+/** More than any catalogue here; "select all matching" stops at this many. */
+const MAX_MATCHING_IDS = 5_000;
+
+/**
+ * A bulk priority change. At most 1,000 ids a request keeps the body inside
+ * the default 100 KB; the page sends a larger selection in batches.
+ */
+const bulkPrioritySchema = z.object({
+  ids: z.array(z.string().uuid()).min(1).max(1_000),
+  priority: z.number().int().min(1).max(1_000_000),
+});
+
 const SORT_ORDER: Record<string, Prisma.ProductOrderByWithRelationInput> = {
   recent: { createdAt: 'desc' },
   name: { displayName: 'asc' },
@@ -270,9 +282,12 @@ export class ProductsController {
     );
   }
 
-  /** Catalogue listing with the FR-5.3 filter dimensions. */
-  @Get()
-  async list(@Query() query: Record<string, string>) {
+  /**
+   * The list's filters and search, read from a query string. Shared by the page
+   * itself and by "select all matching", so the two can never disagree about
+   * which products a view contains.
+   */
+  private listFilter(query: Record<string, string>) {
     const q = parseBody(listQuerySchema, query);
     const tokens = searchTokens(q.search ?? '');
     const searching = tokens.length > 0;
@@ -309,27 +324,41 @@ export class ProductsController {
     const secondarySort: Prisma.ProductOrderByWithRelationInput = SORT_ORDER[sort] ?? {
       createdAt: 'desc',
     };
+    return { q, tokens, searching, sort, where, secondarySort };
+  }
+
+  /**
+   * The products the search matches among those the filters allow, best match
+   * first. Matched here rather than in SQL: the search forgives word order and
+   * typos (see fuzzy-search.ts), which a LIKE cannot, and the filters have
+   * already cut the candidates to one catalogue's worth.
+   */
+  private async searchMatches(where: Prisma.ProductWhereInput, tokens: string[]) {
+    const candidates = await this.prisma.product.findMany({
+      where,
+      select: {
+        id: true,
+        displayName: true,
+        marketplaceProductId: true,
+        url: true,
+        priority: true,
+        createdAt: true,
+      },
+    });
+    return rankMatches(candidates, tokens);
+  }
+
+  /** Catalogue listing with the FR-5.3 filter dimensions. */
+  @Get()
+  async list(@Query() query: Record<string, string>) {
+    const { q, tokens, searching, sort, where, secondarySort } = this.listFilter(query);
     const skip = (q.page - 1) * q.pageSize;
     const include = { category: { select: { id: true, name: true, color: true } } } as const;
 
     let items: Array<Prisma.ProductGetPayload<{ include: typeof include }>>;
     let total: number;
     if (searching) {
-      // Matched here rather than in SQL: the search forgives word order and
-      // typos (see fuzzy-search.ts), which a LIKE cannot, and the filters above
-      // have already cut the candidates to one catalogue's worth.
-      const candidates = await this.prisma.product.findMany({
-        where,
-        select: {
-          id: true,
-          displayName: true,
-          marketplaceProductId: true,
-          url: true,
-          priority: true,
-          createdAt: true,
-        },
-      });
-      const matches = rankMatches(candidates, tokens);
+      const matches = await this.searchMatches(where, tokens);
       total = matches.length;
       if (sort === 'relevance') {
         const pageIds = matches.slice(skip, skip + q.pageSize).map((m) => m.id);
@@ -373,6 +402,41 @@ export class ProductsController {
       page: q.page,
       pageSize: q.pageSize,
     };
+  }
+
+  /**
+   * The id of every product the list's filters and search match, on every page
+   * — what "select all matching" selects for a bulk change. Declared before
+   * `:id` so the router does not read "ids" as a product id.
+   */
+  @Get('ids')
+  async ids(@Query() query: Record<string, string>) {
+    const { tokens, searching, where } = this.listFilter(query);
+    if (searching) {
+      const matches = await this.searchMatches(where, tokens);
+      return { ids: matches.slice(0, MAX_MATCHING_IDS).map((m) => m.id), total: matches.length };
+    }
+    const [rows, total] = await Promise.all([
+      this.prisma.product.findMany({ where, select: { id: true }, take: MAX_MATCHING_IDS }),
+      this.prisma.product.count({ where }),
+    ]);
+    return { ids: rows.map((row) => row.id), total };
+  }
+
+  /**
+   * One priority for many products — the list's bulk action. Higher wins, so
+   * this decides which products are checked first when a marketplace has more
+   * than its limit.
+   */
+  @Post('priority')
+  @HttpCode(200)
+  async setPriority(@Body() body: unknown) {
+    const { ids, priority } = parseBody(bulkPrioritySchema, body);
+    const { count } = await this.prisma.product.updateMany({
+      where: { id: { in: ids } },
+      data: { priority },
+    });
+    return { updated: count };
   }
 
   @Get(':id')

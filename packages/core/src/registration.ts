@@ -109,6 +109,8 @@ export interface RegisterParams {
   notes?: string;
   tags?: string[];
   categoryId?: string | null;
+  /** List priority, HIGHER first; the column's default (1) when absent. */
+  priority?: number;
 }
 
 /**
@@ -245,6 +247,7 @@ export async function registerProduct(
       targetPrice: params.targetPrice ?? null,
       dropThresholdPct: params.dropThresholdPct ?? null,
       categoryId: params.categoryId ?? null,
+      ...(params.priority !== undefined ? { priority: params.priority } : {}),
       status: 'active',
       nextCheckAt: new Date(),
     },

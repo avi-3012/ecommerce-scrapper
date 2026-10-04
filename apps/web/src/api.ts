@@ -380,6 +380,14 @@ export function inr(value: string | number | null | undefined): string {
   }).format(num);
 }
 
+/** A typed priority (a whole number, 1 to 1,000,000; higher first), or null if it isn't one. */
+export function parsePriority(text: string): number | null {
+  const value = Number(text.trim());
+  return text.trim() !== '' && Number.isInteger(value) && value >= 1 && value <= 1_000_000
+    ? value
+    : null;
+}
+
 /** Signed percentage for price-change chips, e.g. "-12.5%" / "+3%". */
 export function inrDelta(pct: number): string {
   const sign = pct > 0 ? '+' : '';

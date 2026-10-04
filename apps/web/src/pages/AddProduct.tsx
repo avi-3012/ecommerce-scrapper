@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Search } from 'lucide-react';
-import { api, errorMessage, inr } from '../api.js';
+import { api, errorMessage, inr, parsePriority } from '../api.js';
 import type { Category, PreviewResult, Product } from '../api.js';
 import {
   Button,
@@ -27,6 +27,8 @@ export function AddProductPage(): JSX.Element {
   const [tags, setTags] = useState('');
   const [categoryId, setCategoryId] = useState('');
   const [notes, setNotes] = useState('');
+  const [priority, setPriority] = useState('1');
+  const priorityValue = parsePriority(priority);
   const { data: categories } = useQuery({
     queryKey: ['categories'],
     queryFn: () => api<Category[]>('/categories'),
@@ -99,6 +101,7 @@ export function AddProductPage(): JSX.Element {
                 .filter(Boolean)
             : undefined,
           categoryId: categoryId || undefined,
+          priority: priorityValue ?? undefined,
         }),
       }),
     onSuccess: (product) => navigate(`/products/${product.id}`),
@@ -201,6 +204,25 @@ export function AddProductPage(): JSX.Element {
                 ))}
               </Select>
             </Field>
+            <Field
+              label="Priority"
+              hint={
+                priorityValue === null
+                  ? 'Enter a whole number from 1 upward.'
+                  : 'Higher is checked first when there are more products than the limit — 2 goes before 1.'
+              }
+            >
+              <Input
+                type="number"
+                inputMode="numeric"
+                min="1"
+                max="1000000"
+                step="1"
+                value={priority}
+                aria-invalid={priorityValue === null}
+                onChange={(e) => setPriority(e.target.value)}
+              />
+            </Field>
             <div className="sm:col-span-2">
               <Field label="Notes">
                 <textarea
@@ -220,6 +242,7 @@ export function AddProductPage(): JSX.Element {
             <Button
               variant="primary"
               loading={register.isPending}
+              disabled={priorityValue === null}
               onClick={() => register.mutate()}
             >
               Track this product

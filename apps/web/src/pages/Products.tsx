@@ -21,7 +21,7 @@ import {
   X,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import { api, errorMessage, inr, isNearLow, relTime } from '../api.js';
+import { api, errorMessage, inr, isNearLow, parsePriority, relTime } from '../api.js';
 import type { Category, Paged, Product } from '../api.js';
 import { useToast } from '../toast.js';
 import {
@@ -33,13 +33,14 @@ import {
   ConfirmDialog,
   EmptyState,
   IconButton,
+  Input,
   MarketplaceBadge,
   RangeMeter,
   Select,
   StatusBadge,
   StockBadge,
 } from '../ui.js';
-import { PAGE_SIZES, PagerBar, PriceChange } from '../components.js';
+import { PAGE_SIZES, PagerBar, PriceChange, TriStateCheckbox } from '../components.js';
 import { CategoryManager } from '../CategoryManager.js';
 
 const PAGE_SIZE_KEY = 'pricepulse-products-page-size';
@@ -249,6 +250,81 @@ export function ProductsPage(): JSX.Element {
     }
   }
 
+  // ── Bulk priority ────────────────────────────────────────────────────────
+  // A selection survives paging, so it can be gathered across pages, but not a
+  // change of filters or search: what is selected must be what was in view.
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const [bulkPriority, setBulkPriority] = useState('2');
+  const filterKey = [...apiParams.entries()]
+    .filter(([key]) => key !== 'page' && key !== 'pageSize')
+    .map(([key, value]) => `${key}=${value}`)
+    .sort()
+    .join('&');
+  useEffect(() => setSelected(new Set()), [filterKey]);
+
+  const pageIds = data?.items.map((p) => p.id) ?? [];
+  const pageSelected = pageIds.filter((id) => selected.has(id)).length;
+  const bulkPriorityValue = parsePriority(bulkPriority);
+
+  function toggleSelected(id: string): void {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function togglePage(): void {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      const allOnPage = pageIds.every((id) => next.has(id));
+      for (const id of pageIds) {
+        if (allOnPage) next.delete(id);
+        else next.add(id);
+      }
+      return next;
+    });
+  }
+
+  const selectMatching = useMutation({
+    mutationFn: () => {
+      const query = new URLSearchParams(apiParams);
+      query.delete('page');
+      query.delete('pageSize');
+      return api<{ ids: string[]; total: number }>(`/products/ids?${query.toString()}`);
+    },
+    onSuccess: ({ ids, total }) => {
+      setSelected(new Set(ids));
+      if (total > ids.length) {
+        toast.info(`Selected the first ${ids.length} of ${total} matching products.`);
+      }
+    },
+    onError: (err) => toast.error(errorMessage(err)),
+  });
+
+  const applyPriority = useMutation({
+    mutationFn: async (priority: number) => {
+      // In batches: the API takes up to 1,000 products a request.
+      const ids = [...selected];
+      let updated = 0;
+      for (let i = 0; i < ids.length; i += 1_000) {
+        const result = await api<{ updated: number }>('/products/priority', {
+          method: 'POST',
+          body: JSON.stringify({ ids: ids.slice(i, i + 1_000), priority }),
+        });
+        updated += result.updated;
+      }
+      return { updated, priority };
+    },
+    onSuccess: ({ updated, priority }) => {
+      toast.success(`Priority P${priority} set on ${updated} product${updated === 1 ? '' : 's'}.`);
+      setSelected(new Set());
+    },
+    onError: (err) => toast.error(errorMessage(err)),
+    onSettled: invalidate,
+  });
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -424,6 +500,8 @@ export function ProductsPage(): JSX.Element {
                 <ProductGridCard
                   key={p.id}
                   product={p}
+                  selected={selected.has(p.id)}
+                  onSelect={() => toggleSelected(p.id)}
                   busy={pendingId === p.id}
                   onOpen={() => navigate(`/products/${p.id}`)}
                   onAction={(verb) => action.mutate({ id: p.id, verb })}
@@ -438,6 +516,8 @@ export function ProductsPage(): JSX.Element {
                 <ProductRow
                   key={p.id}
                   product={p}
+                  selected={selected.has(p.id)}
+                  onSelect={() => toggleSelected(p.id)}
                   busy={pendingId === p.id}
                   onOpen={() => navigate(`/products/${p.id}`)}
                   onAction={(verb) => action.mutate({ id: p.id, verb })}
@@ -457,7 +537,77 @@ export function ProductsPage(): JSX.Element {
           total={data.total}
           onPage={goToPage}
           onPageSize={changePageSize}
-        />
+          leading={
+            <TriStateCheckbox
+              checked={pageIds.length > 0 && pageSelected === pageIds.length}
+              mixed={pageSelected > 0}
+              label={`Select all ${pageIds.length} on this page`}
+              onChange={togglePage}
+            />
+          }
+        >
+          {selected.size > 0 && (
+            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+              <p className="nums">
+                <span className="font-medium text-fg">{selected.size}</span> selected
+                {data.total > selected.size && (
+                  <>
+                    {' · '}
+                    <button
+                      className="text-brand-subtle-fg hover:underline disabled:opacity-60"
+                      disabled={selectMatching.isPending}
+                      onClick={() => selectMatching.mutate()}
+                    >
+                      Select all {data.total} matching
+                    </button>
+                  </>
+                )}
+                {' · '}
+                <button
+                  className="hover:text-fg hover:underline"
+                  onClick={() => setSelected(new Set())}
+                >
+                  Clear
+                </button>
+              </p>
+              <form
+                className="flex items-center gap-2"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  if (bulkPriorityValue !== null) applyPriority.mutate(bulkPriorityValue);
+                }}
+              >
+                <label className="flex items-center gap-2 whitespace-nowrap">
+                  Set priority
+                  {/* Input fills its box; the box sets the width. */}
+                  <span className="block w-20">
+                    <Input
+                      type="number"
+                      inputMode="numeric"
+                      min={1}
+                      max={1_000_000}
+                      step={1}
+                      value={bulkPriority}
+                      aria-invalid={bulkPriorityValue === null}
+                      title="Higher is checked first, so 2 goes before 1"
+                      onChange={(e) => setBulkPriority(e.target.value)}
+                      className="nums h-8"
+                    />
+                  </span>
+                </label>
+                <Button
+                  type="submit"
+                  variant="primary"
+                  size="sm"
+                  loading={applyPriority.isPending}
+                  disabled={bulkPriorityValue === null}
+                >
+                  Apply to {selected.size}
+                </Button>
+              </form>
+            </div>
+          )}
+        </PagerBar>
       )}
 
       <CategoryManager open={manageCategories} onClose={() => setManageCategories(false)} />
@@ -789,6 +939,8 @@ function PriceBlock({ product }: { product: Product }): JSX.Element {
 
 function ProductRow({
   product,
+  selected,
+  onSelect,
   busy,
   onOpen,
   onAction,
@@ -796,6 +948,8 @@ function ProductRow({
   onDelete,
 }: {
   product: Product;
+  selected: boolean;
+  onSelect: () => void;
   busy: boolean;
   onOpen: () => void;
   onAction: (verb: 'pause' | 'resume' | 'check') => void;
@@ -809,10 +963,16 @@ function ProductRow({
   return (
     <Card
       hover
-      className={`flex flex-col gap-3 p-3 sm:flex-row sm:items-center ${product.status !== 'active' ? 'opacity-70' : ''}`}
+      className={`flex flex-col gap-3 p-3 sm:flex-row sm:items-center ${product.status !== 'active' ? 'opacity-70' : ''} ${selected ? 'ring-2 ring-brand' : ''}`}
     >
       {/* Product info — takes the full row width on mobile so badges never wrap per-word */}
       <div className="flex min-w-0 flex-1 gap-3">
+        <TriStateCheckbox
+          checked={selected}
+          label={`Select ${product.displayName}`}
+          onChange={onSelect}
+          className="mt-1"
+        />
         <Thumb product={product} size="size-14" />
         <button className="min-w-0 flex-1 text-left" onClick={onOpen}>
           <p className="line-clamp-2 font-medium text-fg hover:text-brand-subtle-fg sm:truncate">
@@ -847,6 +1007,8 @@ function ProductRow({
 
 function ProductGridCard({
   product,
+  selected,
+  onSelect,
   busy,
   onOpen,
   onAction,
@@ -854,6 +1016,8 @@ function ProductGridCard({
   onDelete,
 }: {
   product: Product;
+  selected: boolean;
+  onSelect: () => void;
   busy: boolean;
   onOpen: () => void;
   onAction: (verb: 'pause' | 'resume' | 'check') => void;
@@ -861,15 +1025,26 @@ function ProductGridCard({
   onDelete: () => void;
 }): JSX.Element {
   return (
-    <Card hover className={`flex flex-col p-4 ${product.status !== 'active' ? 'opacity-70' : ''}`}>
-      <button className="flex items-start gap-3 text-left" onClick={onOpen}>
-        <Thumb product={product} size="size-16" />
-        <span className="min-w-0 flex-1">
-          <span className="line-clamp-2 font-medium text-fg hover:text-brand-subtle-fg">
-            {product.displayName}
+    <Card
+      hover
+      className={`flex flex-col p-4 ${product.status !== 'active' ? 'opacity-70' : ''} ${selected ? 'ring-2 ring-brand' : ''}`}
+    >
+      <div className="flex items-start gap-3">
+        <TriStateCheckbox
+          checked={selected}
+          label={`Select ${product.displayName}`}
+          onChange={onSelect}
+          className="mt-1"
+        />
+        <button className="flex min-w-0 flex-1 items-start gap-3 text-left" onClick={onOpen}>
+          <Thumb product={product} size="size-16" />
+          <span className="min-w-0 flex-1">
+            <span className="line-clamp-2 font-medium text-fg hover:text-brand-subtle-fg">
+              {product.displayName}
+            </span>
           </span>
-        </span>
-      </button>
+        </button>
+      </div>
       <MetaBadges product={product} />
       <div className="mt-3 flex items-end justify-between">
         <PriceBlock product={product} />
