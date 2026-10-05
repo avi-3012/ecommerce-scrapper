@@ -1,8 +1,10 @@
 /** Shared composite components extracted to kill drift (resolves UI-UX-GAPS §6.2). */
 import { useEffect, useRef } from 'react';
 import type { ReactNode } from 'react';
-import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from 'lucide-react';
-import { inrDelta } from './api.js';
+import { useNavigate } from 'react-router-dom';
+import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, LogOut, Moon } from 'lucide-react';
+import { api, inrDelta } from './api.js';
+import { useTheme } from './theme.js';
 import { IconButton, Select } from './ui.js';
 
 /** The PricePulse logo mark — a pulse/price wave in a rounded tile (resolves §1.1). */
@@ -32,6 +34,57 @@ export function Wordmark(): JSX.Element {
       <Logo />
       <span className="text-lg font-semibold tracking-tight text-fg">PricePulse</span>
     </span>
+  );
+}
+
+// ── Display and sign-in ──────────────────────────────────────────────────
+// At the foot of the side menu, and on phones, which have no side menu, at the
+// foot of Settings. Each is a full-width row, styled like a menu item.
+
+const MENU_ROW =
+  'flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-fg-muted transition-colors';
+
+/** Dark mode as a switch: the label stays put and the switch shows which is on. */
+export function ThemeSwitch(): JSX.Element {
+  const { theme, toggle } = useTheme();
+  const on = theme === 'dark';
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      onClick={toggle}
+      className={`${MENU_ROW} hover:bg-surface-2 hover:text-fg`}
+    >
+      <Moon className="size-5" aria-hidden />
+      <span className="flex-1 text-left">Dark mode</span>
+      <span
+        aria-hidden
+        className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${on ? 'bg-brand' : 'bg-line-strong'}`}
+      >
+        <span
+          className={`absolute left-0 top-0.5 size-4 rounded-full bg-card shadow-sm transition-transform motion-reduce:transition-none ${on ? 'translate-x-[18px]' : 'translate-x-0.5'}`}
+        />
+      </span>
+    </button>
+  );
+}
+
+export function SignOutButton(): JSX.Element {
+  const navigate = useNavigate();
+  async function signOut(): Promise<void> {
+    await api('/auth/logout', { method: 'POST' }).catch(() => undefined);
+    navigate('/login');
+  }
+  return (
+    <button
+      type="button"
+      onClick={() => void signOut()}
+      className={`${MENU_ROW} hover:bg-danger-subtle hover:text-danger-fg`}
+    >
+      <LogOut className="size-5" aria-hidden />
+      Sign out
+    </button>
   );
 }
 

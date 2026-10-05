@@ -1,25 +1,19 @@
-import { useEffect, useRef, useState } from 'react';
-import { NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { useEffect } from 'react';
+import { NavLink, Outlet } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Bell,
   Download,
   Gauge,
   LayoutDashboard,
-  LogOut,
   MessageSquare,
-  Moon,
   Package,
   Settings2,
-  Sun,
-  UserCircle2,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { api } from './api.js';
 import type { SystemStatusReport } from './api.js';
-import { useTheme } from './theme.js';
-import { IconButton } from './ui.js';
-import { Logo, Wordmark } from './components.js';
+import { SignOutButton, ThemeSwitch, Wordmark } from './components.js';
 
 const NAV: Array<{ to: string; label: string; icon: LucideIcon }> = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard },
@@ -83,8 +77,9 @@ export function Layout(): JSX.Element {
         Skip to content
       </a>
 
-      {/* Desktop sidebar */}
-      <aside className="fixed inset-y-0 left-0 hidden w-56 border-r border-line bg-card p-4 md:flex md:flex-col">
+      {/* Desktop sidebar. Dark mode and sign-out sit at its foot rather than in
+          a bar across the top, which cost every page 56px of height. */}
+      <aside className="fixed inset-y-0 left-0 hidden w-56 overflow-y-auto border-r border-line bg-card p-4 md:flex md:flex-col">
         <div className="mb-6 px-1">
           <Wordmark />
         </div>
@@ -108,19 +103,11 @@ export function Layout(): JSX.Element {
           ))}
         </nav>
         <HealthPill health={health} status={status} />
+        <div className="mt-3 space-y-1 border-t border-line pt-3">
+          <ThemeSwitch />
+          <SignOutButton />
+        </div>
       </aside>
-
-      {/* Top bar */}
-      <header className="fixed inset-x-0 top-0 z-30 flex h-14 items-center justify-between border-b border-line bg-card/80 px-4 backdrop-blur md:left-56 lg:px-8">
-        <div className="flex items-center gap-2 md:hidden">
-          <Logo size={24} />
-          <span className="font-semibold text-fg">PricePulse</span>
-        </div>
-        <div className="ml-auto flex items-center gap-1">
-          <ThemeToggle />
-          <AccountMenu />
-        </div>
-      </header>
 
       {/* Mobile bottom nav */}
       <nav className="fixed inset-x-0 bottom-0 z-40 flex justify-around border-t border-line bg-card py-1 md:hidden">
@@ -141,7 +128,7 @@ export function Layout(): JSX.Element {
         ))}
       </nav>
 
-      <main id="main" className="px-4 pb-24 pt-20 md:ml-56 md:pb-10 lg:px-8">
+      <main id="main" className="px-4 pb-24 pt-6 md:ml-56 md:pb-10 lg:px-8 lg:pt-8">
         <div className="mx-auto max-w-6xl">
           <Outlet />
         </div>
@@ -169,61 +156,6 @@ function HealthPill({
     <div className="flex items-center gap-2 rounded-lg bg-surface-2 px-3 py-2 text-xs text-fg-muted">
       <span className={`size-2 rounded-full ${dot} ${health !== 'green' ? 'animate-pulse' : ''}`} />
       {label}
-    </div>
-  );
-}
-
-function ThemeToggle(): JSX.Element {
-  const { theme, toggle } = useTheme();
-  return (
-    <IconButton
-      icon={theme === 'dark' ? Sun : Moon}
-      label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-      onClick={toggle}
-    />
-  );
-}
-
-function AccountMenu(): JSX.Element {
-  const [open, setOpen] = useState(false);
-  const navigate = useNavigate();
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const onClick = (e: MouseEvent): void => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener('mousedown', onClick);
-    return () => document.removeEventListener('mousedown', onClick);
-  }, []);
-
-  async function logout(): Promise<void> {
-    await api('/auth/logout', { method: 'POST' }).catch(() => undefined);
-    navigate('/login');
-  }
-
-  return (
-    <div ref={ref} className="relative">
-      <IconButton icon={UserCircle2} label="Account menu" onClick={() => setOpen((o) => !o)} />
-      {open && (
-        <div className="absolute right-0 top-10 w-44 rounded-lg border border-line bg-card p-1 shadow-pop">
-          <button
-            onClick={() => {
-              setOpen(false);
-              navigate('/settings');
-            }}
-            className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm text-fg-muted hover:bg-surface-2 hover:text-fg"
-          >
-            <Settings2 className="size-4" /> Settings
-          </button>
-          <button
-            onClick={() => void logout()}
-            className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm text-danger-fg hover:bg-danger-subtle"
-          >
-            <LogOut className="size-4" /> Sign out
-          </button>
-        </div>
-      )}
     </div>
   );
 }

@@ -4,6 +4,7 @@ import { Download } from 'lucide-react';
 import { api, errorMessage } from '../api.js';
 import type { SettingsView } from '../api.js';
 import { useToast } from '../toast.js';
+import { SignOutButton, ThemeSwitch } from '../components.js';
 import { Button, Card, Field, Input, Select, Spinner } from '../ui.js';
 
 export function SettingsPage(): JSX.Element {
@@ -435,6 +436,12 @@ function SettingsForm({
           </Button>
         </div>
       </Section>
+
+      {/* Phones have no side menu, so its dark mode and sign-out live here. */}
+      <Card className="space-y-1 p-2 md:hidden">
+        <ThemeSwitch />
+        <SignOutButton />
+      </Card>
     </div>
   );
 }
