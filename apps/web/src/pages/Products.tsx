@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -79,6 +79,11 @@ function storedChecked(): CheckedFilter {
 
 export function ProductsPage(): JSX.Element {
   const [params, setParams] = useSearchParams();
+  // The URL as of the latest render. The debounced search and price writes fire
+  // from a timer started while typing; building on this rather than on the URL
+  // as it was then keeps a dropdown changed in the meantime.
+  const latestParams = useRef(params);
+  latestParams.current = params;
   const [deleting, setDeleting] = useState<Product | null>(null);
   const [manageCategories, setManageCategories] = useState(false);
   const [view, setView] = useState<'list' | 'grid'>('grid');
@@ -95,7 +100,7 @@ export function ProductsPage(): JSX.Element {
   // Skip when unchanged, so mounting a deep link (?search=…&page=3) keeps its page.
   useEffect(() => {
     const handle = setTimeout(() => {
-      if ((params.get('search') ?? '') === search.trim()) return;
+      if ((latestParams.current.get('search') ?? '') === search.trim()) return;
       setFilter('search', search.trim());
     }, 300);
     return () => clearTimeout(handle);
@@ -106,21 +111,17 @@ export function ProductsPage(): JSX.Element {
   // wipe the page back to 1.
   useEffect(() => {
     const handle = setTimeout(() => {
+      const current = latestParams.current;
       if (
-        (params.get('minPrice') ?? '') === minPrice.trim() &&
-        (params.get('maxPrice') ?? '') === maxPrice.trim()
+        (current.get('minPrice') ?? '') === minPrice.trim() &&
+        (current.get('maxPrice') ?? '') === maxPrice.trim()
       )
         return;
-      setParams(
-        (prev) => {
-          const next = new URLSearchParams(prev);
-          setOrDelete(next, 'minPrice', minPrice.trim());
-          setOrDelete(next, 'maxPrice', maxPrice.trim());
-          next.delete('page');
-          return next;
-        },
-        { replace: true },
-      );
+      const next = new URLSearchParams(current);
+      setOrDelete(next, 'minPrice', minPrice.trim());
+      setOrDelete(next, 'maxPrice', maxPrice.trim());
+      next.delete('page');
+      setParams(next, { replace: true });
     }, 400);
     return () => clearTimeout(handle);
   }, [minPrice, maxPrice]);
@@ -200,7 +201,7 @@ export function ProductsPage(): JSX.Element {
   });
 
   function setFilter(key: string, value: string): void {
-    const next = new URLSearchParams(params);
+    const next = new URLSearchParams(latestParams.current);
     setOrDelete(next, key, value);
     // "Best match" only means something while searching.
     if (key === 'search' && !value && next.get('sort') === 'relevance') next.delete('sort');
@@ -254,7 +255,11 @@ export function ProductsPage(): JSX.Element {
   // A selection survives paging, so it can be gathered across pages, but not a
   // change of filters or search: what is selected must be what was in view.
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  // What the bulk bar changes, and to what: a priority, or a category
+  // ('none' takes the category away; '' means one has not been chosen yet).
+  const [bulkField, setBulkField] = useState<'priority' | 'category'>('priority');
   const [bulkPriority, setBulkPriority] = useState('2');
+  const [bulkCategory, setBulkCategory] = useState('');
   const filterKey = [...apiParams.entries()]
     .filter(([key]) => key !== 'page' && key !== 'pageSize')
     .map(([key, value]) => `${key}=${value}`)
@@ -265,6 +270,7 @@ export function ProductsPage(): JSX.Element {
   const pageIds = data?.items.map((p) => p.id) ?? [];
   const pageSelected = pageIds.filter((id) => selected.has(id)).length;
   const bulkPriorityValue = parsePriority(bulkPriority);
+  const bulkReady = bulkField === 'priority' ? bulkPriorityValue !== null : bulkCategory !== '';
 
   function toggleSelected(id: string): void {
     setSelected((prev) => {
@@ -303,22 +309,30 @@ export function ProductsPage(): JSX.Element {
     onError: (err) => toast.error(errorMessage(err)),
   });
 
-  const applyPriority = useMutation({
-    mutationFn: async (priority: number) => {
+  const applyBulk = useMutation({
+    mutationFn: async (
+      change: { priority: number } | { categoryId: string | null },
+    ): Promise<{ updated: number; change: typeof change }> => {
       // In batches: the API takes up to 1,000 products a request.
       const ids = [...selected];
       let updated = 0;
       for (let i = 0; i < ids.length; i += 1_000) {
-        const result = await api<{ updated: number }>('/products/priority', {
+        const result = await api<{ updated: number }>('/products/bulk', {
           method: 'POST',
-          body: JSON.stringify({ ids: ids.slice(i, i + 1_000), priority }),
+          body: JSON.stringify({ ids: ids.slice(i, i + 1_000), ...change }),
         });
         updated += result.updated;
       }
-      return { updated, priority };
+      return { updated, change };
     },
-    onSuccess: ({ updated, priority }) => {
-      toast.success(`Priority P${priority} set on ${updated} product${updated === 1 ? '' : 's'}.`);
+    onSuccess: ({ updated, change }) => {
+      const products = `${updated} product${updated === 1 ? '' : 's'}`;
+      if ('priority' in change) toast.success(`Priority P${change.priority} set on ${products}.`);
+      else if (change.categoryId === null) toast.success(`Category removed from ${products}.`);
+      else {
+        const name = categories?.find((c) => c.id === change.categoryId)?.name ?? 'Category';
+        toast.success(`“${name}” set on ${products}.`);
+      }
       setSelected(new Set());
     },
     onError: (err) => toast.error(errorMessage(err)),
@@ -571,15 +585,31 @@ export function ProductsPage(): JSX.Element {
                 </button>
               </p>
               <form
-                className="flex items-center gap-2"
+                className="flex flex-wrap items-center gap-2"
                 onSubmit={(e) => {
                   e.preventDefault();
-                  if (bulkPriorityValue !== null) applyPriority.mutate(bulkPriorityValue);
+                  if (!bulkReady) return;
+                  if (bulkField === 'priority' && bulkPriorityValue !== null) {
+                    applyBulk.mutate({ priority: bulkPriorityValue });
+                  } else if (bulkField === 'category') {
+                    applyBulk.mutate({ categoryId: bulkCategory === 'none' ? null : bulkCategory });
+                  }
                 }}
               >
                 <label className="flex items-center gap-2 whitespace-nowrap">
-                  Set priority
-                  {/* Input fills its box; the box sets the width. */}
+                  Set
+                  <Select
+                    aria-label="What to change"
+                    value={bulkField}
+                    onChange={(e) => setBulkField(e.target.value as 'priority' | 'category')}
+                    className="h-8"
+                  >
+                    <option value="priority">Priority</option>
+                    <option value="category">Category</option>
+                  </Select>
+                </label>
+                {bulkField === 'priority' ? (
+                  // Input fills its box; the box sets the width.
                   <span className="block w-20">
                     <Input
                       type="number"
@@ -588,19 +618,37 @@ export function ProductsPage(): JSX.Element {
                       max={1_000_000}
                       step={1}
                       value={bulkPriority}
+                      aria-label="Priority"
                       aria-invalid={bulkPriorityValue === null}
                       title="Higher is checked first, so 2 goes before 1"
                       onChange={(e) => setBulkPriority(e.target.value)}
                       className="nums h-8"
                     />
                   </span>
-                </label>
+                ) : (
+                  <Select
+                    aria-label="Category"
+                    value={bulkCategory}
+                    onChange={(e) => setBulkCategory(e.target.value)}
+                    className="h-8 max-w-48"
+                  >
+                    <option value="" disabled>
+                      Choose a category…
+                    </option>
+                    {categories?.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                    <option value="none">No category</option>
+                  </Select>
+                )}
                 <Button
                   type="submit"
                   variant="primary"
                   size="sm"
-                  loading={applyPriority.isPending}
-                  disabled={bulkPriorityValue === null}
+                  loading={applyBulk.isPending}
+                  disabled={!bulkReady}
                 >
                   Apply to {selected.size}
                 </Button>

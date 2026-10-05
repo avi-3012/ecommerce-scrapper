@@ -14,10 +14,11 @@ interface Row {
   createdAt: Date;
   currentPrice: number | null;
   lastSuccessAt: Date | null;
+  categoryId: string | null;
   category: null;
 }
 
-type Order = Record<string, 'asc' | 'desc'>;
+type Order = Record<string, 'asc' | 'desc' | { sort: 'asc' | 'desc'; nulls?: 'first' | 'last' }>;
 
 /**
  * Just enough of Prisma for the product list: equality and `id in` filters,
@@ -37,12 +38,16 @@ function fakePrisma(rows: Row[]) {
     });
   const compare = (orderBy: Order[]) => (a: Row, b: Row) => {
     for (const order of orderBy) {
-      const [key, dir] = Object.entries(order)[0]!;
+      const [key, spec] = Object.entries(order)[0]!;
+      const dir = typeof spec === 'string' ? spec : spec.sort;
+      // Postgres' own default: NULLS LAST ascending, NULLS FIRST descending.
+      const nulls =
+        typeof spec === 'string' || !spec.nulls ? (dir === 'asc' ? 'last' : 'first') : spec.nulls;
       const x = a[key as keyof Row] as number | Date | string | null;
       const y = b[key as keyof Row] as number | Date | string | null;
       if (x === y) continue;
-      const lt = x === null ? false : y === null ? true : x < y;
-      return (lt ? -1 : 1) * (dir === 'asc' ? 1 : -1);
+      if (x === null || y === null) return (x === null ? 1 : -1) * (nulls === 'last' ? 1 : -1);
+      return (x < y ? -1 : 1) * (dir === 'asc' ? 1 : -1);
     }
     return 0;
   };
@@ -75,10 +80,15 @@ function fakePrisma(rows: Row[]) {
       }),
     },
     systemStatus: { findMany: async () => [] },
+    category: {
+      findUnique: async (args: { where: { id: string } }) =>
+        args.where.id === GAMING ? { id: GAMING } : null,
+    },
   } as unknown as PrismaService;
 }
 
 const at = (day: number) => new Date(Date.UTC(2026, 9, day));
+const GAMING = '11111111-1111-4111-8111-111111111111';
 const row = (id: string, displayName: string, over: Partial<Row> = {}): Row => ({
   id,
   marketplace: 'amazon_in',
@@ -90,6 +100,7 @@ const row = (id: string, displayName: string, over: Partial<Row> = {}): Row => (
   createdAt: at(1),
   currentPrice: 50_000,
   lastSuccessAt: at(4),
+  categoryId: null,
   category: null,
   ...over,
 });
@@ -165,7 +176,7 @@ describe('select all matching', () => {
   });
 });
 
-describe('bulk priority', () => {
+describe('bulk edit', () => {
   const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
   const fresh = () => [
     row(id(1), 'Acer Aspire Lite', { createdAt: at(1) }),
@@ -176,24 +187,57 @@ describe('bulk priority', () => {
   it('sets one priority on every selected product, which then leads the list', async () => {
     const controller = new ProductsController(fakePrisma(fresh()), {} as JobsService);
 
-    expect(await controller.setPriority({ ids: [id(1), id(2)], priority: 5 })).toEqual({
+    expect(await controller.bulkEdit({ ids: [id(1), id(2)], priority: 5 })).toEqual({
       updated: 2,
     });
     // The two at P5 first (newest first between them), then the one left at P1.
     expect(ids(await controller.list({}))).toEqual([id(2), id(1), id(3)]);
   });
 
+  it('sets a category on every selected product, or takes it away', async () => {
+    const rows = fresh();
+    const controller = new ProductsController(fakePrisma(rows), {} as JobsService);
+
+    expect(await controller.bulkEdit({ ids: [id(1), id(3)], categoryId: GAMING })).toEqual({
+      updated: 2,
+    });
+    expect(rows.map((r) => r.categoryId)).toEqual([GAMING, null, GAMING]);
+
+    await controller.bulkEdit({ ids: [id(1)], categoryId: null });
+    expect(rows.map((r) => r.categoryId)).toEqual([null, null, GAMING]);
+  });
+
+  it('refuses a category that does not exist, or a change that names nothing', async () => {
+    const controller = new ProductsController(fakePrisma(fresh()), {} as JobsService);
+    await expect(
+      controller.bulkEdit({ ids: [id(1)], categoryId: '22222222-2222-4222-8222-222222222222' }),
+    ).rejects.toThrow('Unknown category');
+    await expect(controller.bulkEdit({ ids: [id(1)] })).rejects.toThrow('Validation failed');
+  });
+
   it('refuses an empty selection, a priority below 1, and over 1,000 at once', async () => {
     const controller = new ProductsController(fakePrisma(fresh()), {} as JobsService);
-    await expect(controller.setPriority({ ids: [], priority: 2 })).rejects.toThrow(
+    await expect(controller.bulkEdit({ ids: [], priority: 2 })).rejects.toThrow(
       'Validation failed',
     );
-    await expect(controller.setPriority({ ids: [id(1)], priority: 0 })).rejects.toThrow(
+    await expect(controller.bulkEdit({ ids: [id(1)], priority: 0 })).rejects.toThrow(
       'Validation failed',
     );
     const tooMany = Array.from({ length: 1_001 }, (_, n) => id(n + 1));
-    await expect(controller.setPriority({ ids: tooMany, priority: 2 })).rejects.toThrow(
+    await expect(controller.bulkEdit({ ids: tooMany, priority: 2 })).rejects.toThrow(
       'Validation failed',
     );
+  });
+});
+
+describe('sorting', () => {
+  it('puts products with no price last, highest price first', async () => {
+    const result = await list({ sort: 'price_desc' });
+    // Priority first (p2), then by price; the one awaiting its first check last.
+    expect(ids(result)).toEqual(['p2', 'exact', 'typo', 'dell', 'waiting']);
+  });
+
+  it('puts them last going the other way too', async () => {
+    expect(ids(await list({ sort: 'price_asc' })).at(-1)).toBe('waiting');
   });
 });

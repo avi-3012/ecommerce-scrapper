@@ -126,21 +126,33 @@ const listQuerySchema = z.object({
 const MAX_MATCHING_IDS = 5_000;
 
 /**
- * A bulk priority change. At most 1,000 ids a request keeps the body inside
- * the default 100 KB; the page sends a larger selection in batches.
+ * One change applied to many products: a priority, a category (null takes it
+ * away), or both. At most 1,000 ids a request keeps the body inside the
+ * default 100 KB; the page sends a larger selection in batches.
  */
-const bulkPrioritySchema = z.object({
-  ids: z.array(z.string().uuid()).min(1).max(1_000),
-  priority: z.number().int().min(1).max(1_000_000),
-});
+const bulkEditSchema = z
+  .object({
+    ids: z.array(z.string().uuid()).min(1).max(1_000),
+    priority: z.number().int().min(1).max(1_000_000).optional(),
+    categoryId: z.string().uuid().nullable().optional(),
+  })
+  .refine((body) => body.priority !== undefined || body.categoryId !== undefined, {
+    message: 'Say what to change: a priority, a category, or both',
+  });
 
+/**
+ * Products with nothing to sort by — no price yet, no discount, never changed —
+ * go last whichever way the sort runs. Postgres puts NULLs FIRST in a
+ * descending sort, so "Price: high → low" opened on page after page of
+ * products still awaiting their first check and looked like it did nothing.
+ */
 const SORT_ORDER: Record<string, Prisma.ProductOrderByWithRelationInput> = {
   recent: { createdAt: 'desc' },
   name: { displayName: 'asc' },
-  price_asc: { currentPrice: 'asc' },
-  price_desc: { currentPrice: 'desc' },
-  biggest_drop: { currentDiscountPct: 'desc' },
-  recently_changed: { lastChangedAt: 'desc' },
+  price_asc: { currentPrice: { sort: 'asc', nulls: 'last' } },
+  price_desc: { currentPrice: { sort: 'desc', nulls: 'last' } },
+  biggest_drop: { currentDiscountPct: { sort: 'desc', nulls: 'last' } },
+  recently_changed: { lastChangedAt: { sort: 'desc', nulls: 'last' } },
 };
 
 @Controller('products')
@@ -424,17 +436,21 @@ export class ProductsController {
   }
 
   /**
-   * One priority for many products — the list's bulk action. Higher wins, so
-   * this decides which products are checked first when a marketplace has more
-   * than its limit.
+   * One change for many products — the list's bulk action. Priority decides
+   * which products are checked first when a marketplace has more than its
+   * limit; a category only groups them.
    */
-  @Post('priority')
+  @Post('bulk')
   @HttpCode(200)
-  async setPriority(@Body() body: unknown) {
-    const { ids, priority } = parseBody(bulkPrioritySchema, body);
+  async bulkEdit(@Body() body: unknown) {
+    const { ids, priority, categoryId } = parseBody(bulkEditSchema, body);
+    if (categoryId) await this.ensureCategoryExists(categoryId);
     const { count } = await this.prisma.product.updateMany({
       where: { id: { in: ids } },
-      data: { priority },
+      data: {
+        ...(priority !== undefined ? { priority } : {}),
+        ...(categoryId !== undefined ? { categoryId } : {}),
+      },
     });
     return { updated: count };
   }
