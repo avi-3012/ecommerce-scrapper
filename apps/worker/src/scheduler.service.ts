@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type { OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import {
+  capacityFor,
   getUserWithSettings,
   intervalFor,
   minutesOfDayIn,
@@ -23,6 +24,14 @@ import type { WorkerConfig } from './config.js';
 
 /** How long to keep per-check scrape-audit rows before pruning. */
 const AUDIT_RETENTION_DAYS = 14;
+
+/** First checks a cycle may add on top of the products due in it. */
+const MAX_FIRST_CHECKS_PER_CYCLE = 3;
+/**
+ * First checks use only what the due products leave of this share of a
+ * cycle's request budget, so the products inside the limit never wait on them.
+ */
+const FIRST_CHECK_BUDGET_SHARE = 0.8;
 /** How often the loop wakes to place the next cycle. */
 const IDLE_TICK_MS = 5_000;
 
@@ -165,7 +174,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     this.lastGateReason = '';
 
     const capPerMin = this.identities.capPerMinTotal();
-    const due = await this.dueProducts(config.cycle.maxSec * 1_000, settings);
+    const due = await this.dueProducts(config.cycle.maxSec * 1_000, settings, capPerMin);
 
     // Noise rides ALONG with the products rather than being extra traffic: a
     // noise fetch replaces a product fetch, so the plan size is the product
@@ -308,7 +317,11 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
-  private async dueProducts(horizonMs: number, settings: Settings): Promise<Product[]> {
+  private async dueProducts(
+    horizonMs: number,
+    settings: Settings,
+    capPerMin: number,
+  ): Promise<Product[]> {
     const dueSuspects = this.runner.suspects.due();
     // Everything falling due WITHIN this cycle, not only what is already
     // overdue at the instant it starts. Selecting on `now` quantises the real
@@ -340,7 +353,49 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       }),
     ]);
     const suspectIds = new Set(suspects.map((p) => p.id));
-    return [...suspects, ...normal.filter((p) => !suspectIds.has(p.id))];
+    const scheduled = [...suspects, ...normal.filter((p) => !suspectIds.has(p.id))];
+    const firsts = await this.firstChecks(scheduled, scope, horizon, settings, capPerMin);
+    return [...scheduled, ...firsts];
+  }
+
+  /**
+   * Products past the limit wait behind priority and are never checked, which
+   * left an import under "Awaiting first check" for good — no name, no price,
+   * no stock. Each one is checked until it has succeeded once, on whatever the
+   * cycle has to spare: at most a few a cycle, and none while the products
+   * inside the limit take most of the budget, so they never wait for these.
+   * Highest priority first, then the oldest import.
+   */
+  private async firstChecks(
+    scheduled: Product[],
+    scope: Prisma.ProductWhereInput,
+    horizon: Date,
+    settings: Settings,
+    capPerMin: number,
+  ): Promise<Product[]> {
+    const configCapacity = this.identities.config.limits.capacity;
+    const limited = this.marketplaces.some(
+      (marketplace) => capacityFor(marketplace, settings, configCapacity) > 0,
+    );
+    if (!limited) return []; // no limit: every product is already scheduled
+    const budget = Math.floor(
+      capPerMin * (this.identities.config.cycle.maxSec / 60) * FIRST_CHECK_BUDGET_SHARE,
+    );
+    const room = Math.min(MAX_FIRST_CHECKS_PER_CYCLE, budget - scheduled.length);
+    if (room <= 0) return [];
+    const already = new Set(scheduled.map((p) => p.id));
+    const candidates = await this.prisma.product.findMany({
+      where: {
+        AND: [
+          this.ownProducts,
+          { NOT: scope },
+          { lastSuccessAt: null, nextCheckAt: { lte: horizon } },
+        ],
+      },
+      orderBy: [{ priority: 'desc' }, { createdAt: 'asc' }],
+      take: room + already.size,
+    });
+    return candidates.filter((p) => !already.has(p.id)).slice(0, room);
   }
 
   /**
