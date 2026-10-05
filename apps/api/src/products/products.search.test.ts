@@ -20,16 +20,20 @@ interface Row {
 
 type Order = Record<string, 'asc' | 'desc' | { sort: 'asc' | 'desc'; nulls?: 'first' | 'last' }>;
 
+/** Every product has this much history and this many alerts, for deletion's impact. */
+const HISTORY_EACH = 12;
+const ALERTS_EACH = 2;
+
 /**
- * Just enough of Prisma for the product list: equality and `id in` filters,
+ * Just enough of Prisma for the product list: equality and `in` filters,
  * multi-key ordering, skip/take. Selects and includes return whole rows —
  * the controller only reads what it asked for.
  */
 function fakePrisma(rows: Row[]) {
   const matches = (row: Row, where: Record<string, unknown> = {}): boolean =>
     Object.entries(where).every(([key, value]) => {
-      if (key === 'id' && value && typeof value === 'object' && 'in' in value) {
-        return (value as { in: string[] }).in.includes(row.id);
+      if (value && typeof value === 'object' && 'in' in value) {
+        return (value as { in: unknown[] }).in.includes(row[key as keyof Row]);
       }
       if (value && typeof value === 'object' && 'not' in value) {
         return row[key as keyof Row] !== (value as { not: unknown }).not;
@@ -72,6 +76,19 @@ function fakePrisma(rows: Row[]) {
         for (const row of hit) Object.assign(row, args.data);
         return { count: hit.length };
       },
+      deleteMany: async (args: { where?: Record<string, unknown> }) => {
+        const hit = rows.filter((row) => matches(row, args.where));
+        for (const row of hit) rows.splice(rows.indexOf(row), 1);
+        return { count: hit.length };
+      },
+    },
+    priceHistory: {
+      count: async (args: { where: { productId: { in: string[] } } }) =>
+        rows.filter((row) => args.where.productId.in.includes(row.id)).length * HISTORY_EACH,
+    },
+    alert: {
+      count: async (args: { where: { productId: { in: string[] } } }) =>
+        rows.filter((row) => args.where.productId.in.includes(row.id)).length * ALERTS_EACH,
     },
     user: {
       findFirst: async () => ({
@@ -227,6 +244,70 @@ describe('bulk edit', () => {
     await expect(controller.bulkEdit({ ids: tooMany, priority: 2 })).rejects.toThrow(
       'Validation failed',
     );
+  });
+});
+
+describe('bulk pause, resume and delete', () => {
+  const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+  const mixed = () => [
+    row(id(1), 'Acer Aspire Lite'),
+    row(id(2), 'Dell Inspiron 15', { status: 'paused_user' }),
+    row(id(3), 'HP Victus 15', { status: 'paused_auto' }),
+    row(id(4), 'Lenovo LOQ 15'),
+  ];
+  const statuses = (rows: Row[]) => rows.map((r) => r.status);
+
+  it('pauses the selected products that are being checked, and leaves paused ones be', async () => {
+    const rows = mixed();
+    const controller = new ProductsController(fakePrisma(rows), {} as JobsService);
+
+    expect(await controller.bulkPause({ ids: [id(1), id(2), id(3)] })).toEqual({ paused: 1 });
+    // An auto-paused product keeps saying why it stopped; the unselected one runs on.
+    expect(statuses(rows)).toEqual(['paused_user', 'paused_user', 'paused_auto', 'active']);
+  });
+
+  it('resumes the selected paused products with a clean slate, and leaves active ones be', async () => {
+    const rows = mixed();
+    Object.assign(rows[2]!, { consecutiveFailures: 5 }); // auto-paused after five failures
+    const controller = new ProductsController(fakePrisma(rows), {} as JobsService);
+
+    expect(await controller.bulkResume({ ids: [id(1), id(2), id(3)] })).toEqual({ resumed: 2 });
+    expect(statuses(rows)).toEqual(['active', 'active', 'active', 'active']);
+    // Due now, failures forgotten, as when resuming one.
+    expect(rows[2]).toMatchObject({ consecutiveFailures: 0 });
+    expect((rows[2] as unknown as { nextCheckAt: Date }).nextCheckAt).toBeInstanceOf(Date);
+    // The active one selected alongside was not touched: no check pulled forward.
+    expect(rows[0]).not.toHaveProperty('nextCheckAt');
+  });
+
+  it('deletes only once confirmed, and says first what would go with them', async () => {
+    const rows = mixed();
+    const controller = new ProductsController(fakePrisma(rows), {} as JobsService);
+
+    await expect(controller.bulkDelete({ ids: [id(1), id(3)] })).rejects.toMatchObject({
+      response: { impact: { historyCount: 2 * HISTORY_EACH, alertCount: 2 * ALERTS_EACH } },
+    });
+    expect(rows).toHaveLength(4);
+
+    expect(await controller.bulkDelete({ ids: [id(1), id(3)] }, 'true')).toEqual({
+      deleted: 2,
+      historyCount: 2 * HISTORY_EACH,
+      alertCount: 2 * ALERTS_EACH,
+    });
+    expect(rows.map((r) => r.id)).toEqual([id(2), id(4)]);
+  });
+
+  it('refuses an empty selection and over 1,000 at once', async () => {
+    const controller = new ProductsController(fakePrisma(mixed()), {} as JobsService);
+    const tooMany = Array.from({ length: 1_001 }, (_, n) => id(n + 1));
+    for (const act of [
+      (ids: string[]) => controller.bulkPause({ ids }),
+      (ids: string[]) => controller.bulkResume({ ids }),
+      (ids: string[]) => controller.bulkDelete({ ids }, 'true'),
+    ]) {
+      await expect(act([])).rejects.toThrow('Validation failed');
+      await expect(act(tooMany)).rejects.toThrow('Validation failed');
+    }
   });
 });
 

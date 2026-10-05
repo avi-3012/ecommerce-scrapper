@@ -210,6 +210,17 @@ export function ProductsPage(): JSX.Element {
   }
 
   const page = Math.max(1, Math.floor(Number(params.get('page'))) || 1);
+
+  // A page can empty under you (a bulk delete takes everything on the last
+  // page), and an empty page reads as "no products". Step back to the last
+  // page that has any.
+  useEffect(() => {
+    if (!data || isPlaceholderData || data.items.length > 0 || data.total === 0 || page === 1) {
+      return;
+    }
+    const last = Math.ceil(data.total / pageSize);
+    setFilter('page', last > 1 ? String(last) : '');
+  }, [data, isPlaceholderData, page, pageSize]);
   const pendingId = action.isPending ? action.variables?.id : undefined;
 
   // Page changes push a history entry (Back returns to the previous page) and
@@ -251,7 +262,7 @@ export function ProductsPage(): JSX.Element {
     }
   }
 
-  // ── Bulk priority ────────────────────────────────────────────────────────
+  // ── Bulk actions ─────────────────────────────────────────────────────────
   // A selection survives paging, so it can be gathered across pages, but not a
   // change of filters or search: what is selected must be what was in view.
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
@@ -338,6 +349,39 @@ export function ProductsPage(): JSX.Element {
     onError: (err) => toast.error(errorMessage(err)),
     onSettled: invalidate,
   });
+
+  // Pause, resume and delete, for the whole selection. Delete asks first.
+  const [confirmingBulkDelete, setConfirmingBulkDelete] = useState(false);
+  const bulkAction = useMutation({
+    mutationFn: async (
+      verb: BulkVerb,
+    ): Promise<{ verb: BulkVerb; changed: number; selected: number }> => {
+      // In batches, as for the bulk edit above.
+      const ids = [...selected];
+      let changed = 0;
+      for (let i = 0; i < ids.length; i += 1_000) {
+        const result = await api<{ paused?: number; resumed?: number; deleted?: number }>(
+          verb === 'delete' ? '/products/bulk/delete?confirm=true' : `/products/bulk/${verb}`,
+          { method: 'POST', body: JSON.stringify({ ids: ids.slice(i, i + 1_000) }) },
+        );
+        changed += result.paused ?? result.resumed ?? result.deleted ?? 0;
+      }
+      return { verb, changed, selected: ids.length };
+    },
+    onSuccess: ({ verb, changed, selected: count }) => {
+      const message = bulkActionMessage(verb, changed, count);
+      if (changed > 0) toast.success(message);
+      else toast.info(message);
+      setSelected(new Set());
+    },
+    onError: (err) => toast.error(errorMessage(err)),
+    onSettled: () => {
+      setConfirmingBulkDelete(false);
+      invalidate();
+    },
+  });
+  const bulkBusy = (verb: BulkVerb): boolean =>
+    bulkAction.isPending && bulkAction.variables === verb;
 
   return (
     <div className="space-y-4">
@@ -584,75 +628,107 @@ export function ProductsPage(): JSX.Element {
                   Clear
                 </button>
               </p>
-              <form
-                className="flex flex-wrap items-center gap-2"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  if (!bulkReady) return;
-                  if (bulkField === 'priority' && bulkPriorityValue !== null) {
-                    applyBulk.mutate({ priority: bulkPriorityValue });
-                  } else if (bulkField === 'category') {
-                    applyBulk.mutate({ categoryId: bulkCategory === 'none' ? null : bulkCategory });
-                  }
-                }}
-              >
-                <label className="flex items-center gap-2 whitespace-nowrap">
-                  Set
-                  <Select
-                    aria-label="What to change"
-                    value={bulkField}
-                    onChange={(e) => setBulkField(e.target.value as 'priority' | 'category')}
-                    className="h-8"
-                  >
-                    <option value="priority">Priority</option>
-                    <option value="category">Category</option>
-                  </Select>
-                </label>
-                {bulkField === 'priority' ? (
-                  // Input fills its box; the box sets the width.
-                  <span className="block w-20">
-                    <Input
-                      type="number"
-                      inputMode="numeric"
-                      min={1}
-                      max={1_000_000}
-                      step={1}
-                      value={bulkPriority}
-                      aria-label="Priority"
-                      aria-invalid={bulkPriorityValue === null}
-                      title="Higher is checked first, so 2 goes before 1"
-                      onChange={(e) => setBulkPriority(e.target.value)}
-                      className="nums h-8"
-                    />
-                  </span>
-                ) : (
-                  <Select
-                    aria-label="Category"
-                    value={bulkCategory}
-                    onChange={(e) => setBulkCategory(e.target.value)}
-                    className="h-8 max-w-48"
-                  >
-                    <option value="" disabled>
-                      Choose a category…
-                    </option>
-                    {categories?.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.name}
-                      </option>
-                    ))}
-                    <option value="none">No category</option>
-                  </Select>
-                )}
+              <div className="flex flex-wrap items-center gap-2">
                 <Button
-                  type="submit"
-                  variant="primary"
                   size="sm"
-                  loading={applyBulk.isPending}
-                  disabled={!bulkReady}
+                  icon={Pause}
+                  loading={bulkBusy('pause')}
+                  disabled={bulkAction.isPending}
+                  onClick={() => bulkAction.mutate('pause')}
                 >
-                  Apply to {selected.size}
+                  Pause
                 </Button>
-              </form>
+                <Button
+                  size="sm"
+                  icon={Play}
+                  loading={bulkBusy('resume')}
+                  disabled={bulkAction.isPending}
+                  onClick={() => bulkAction.mutate('resume')}
+                >
+                  Resume
+                </Button>
+                <Button
+                  size="sm"
+                  variant="danger-outline"
+                  icon={Trash2}
+                  disabled={bulkAction.isPending}
+                  onClick={() => setConfirmingBulkDelete(true)}
+                >
+                  Delete
+                </Button>
+                <span aria-hidden className="mx-1 hidden h-5 w-px bg-line sm:block" />
+                <form
+                  className="flex flex-wrap items-center gap-2"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    if (!bulkReady) return;
+                    if (bulkField === 'priority' && bulkPriorityValue !== null) {
+                      applyBulk.mutate({ priority: bulkPriorityValue });
+                    } else if (bulkField === 'category') {
+                      applyBulk.mutate({
+                        categoryId: bulkCategory === 'none' ? null : bulkCategory,
+                      });
+                    }
+                  }}
+                >
+                  <label className="flex items-center gap-2 whitespace-nowrap">
+                    Set
+                    <Select
+                      aria-label="What to change"
+                      value={bulkField}
+                      onChange={(e) => setBulkField(e.target.value as 'priority' | 'category')}
+                      className="h-8"
+                    >
+                      <option value="priority">Priority</option>
+                      <option value="category">Category</option>
+                    </Select>
+                  </label>
+                  {bulkField === 'priority' ? (
+                    // Input fills its box; the box sets the width.
+                    <span className="block w-20">
+                      <Input
+                        type="number"
+                        inputMode="numeric"
+                        min={1}
+                        max={1_000_000}
+                        step={1}
+                        value={bulkPriority}
+                        aria-label="Priority"
+                        aria-invalid={bulkPriorityValue === null}
+                        title="Higher is checked first, so 2 goes before 1"
+                        onChange={(e) => setBulkPriority(e.target.value)}
+                        className="nums h-8"
+                      />
+                    </span>
+                  ) : (
+                    <Select
+                      aria-label="Category"
+                      value={bulkCategory}
+                      onChange={(e) => setBulkCategory(e.target.value)}
+                      className="h-8 max-w-48"
+                    >
+                      <option value="" disabled>
+                        Choose a category…
+                      </option>
+                      {categories?.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name}
+                        </option>
+                      ))}
+                      <option value="none">No category</option>
+                    </Select>
+                  )}
+                  <Button
+                    type="submit"
+                    variant="primary"
+                    size="sm"
+                    loading={applyBulk.isPending}
+                    disabled={!bulkReady}
+                  >
+                    Apply to {selected.size}
+                  </Button>
+                </form>
+              </div>
             </div>
           )}
         </PagerBar>
@@ -669,8 +745,37 @@ export function ProductsPage(): JSX.Element {
         onConfirm={() => deleting && remove.mutate(deleting.id)}
         onCancel={() => setDeleting(null)}
       />
+
+      <ConfirmDialog
+        open={confirmingBulkDelete}
+        title={`Delete ${selected.size} product${selected.size === 1 ? '' : 's'}?`}
+        body="This permanently removes the selected products, their entire price history, and their alerts. This cannot be undone."
+        confirmLabel="Delete permanently"
+        loading={bulkBusy('delete')}
+        onConfirm={() => bulkAction.mutate('delete')}
+        onCancel={() => setConfirmingBulkDelete(false)}
+      />
     </div>
   );
+}
+
+type BulkVerb = 'pause' | 'resume' | 'delete';
+
+/** What a bulk pause, resume or delete did, and what it left alone. */
+function bulkActionMessage(verb: BulkVerb, changed: number, selected: number): string {
+  const products = (n: number): string => `${n} product${n === 1 ? '' : 's'}`;
+  const skipped = selected - changed;
+  const were = skipped === 1 ? 'was' : 'were';
+  switch (verb) {
+    case 'pause':
+      if (changed === 0) return 'Nothing to pause: the selected products were already paused.';
+      return `Paused ${products(changed)}.${skipped > 0 ? ` ${skipped} ${were} already paused.` : ''}`;
+    case 'resume':
+      if (changed === 0) return 'Nothing to resume: none of the selected products were paused.';
+      return `Resumed ${products(changed)}.${skipped > 0 ? ` ${skipped} ${were} not paused.` : ''}`;
+    case 'delete':
+      return `Deleted ${products(changed)}.`;
+  }
 }
 
 /** Set a query param, or delete it when the value is empty. */

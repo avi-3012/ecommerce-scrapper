@@ -297,14 +297,41 @@ export async function resumeAllProducts(prisma: PrismaClient): Promise<number> {
   return count;
 }
 
-/** What deletion destroys — shown in the FR-1.6 confirmation step. */
+/**
+ * Pause the products in `ids` that are being checked. Paused ones are left as
+ * they are, so an auto-paused product keeps saying why it stopped. Returns how
+ * many were paused.
+ */
+export async function pauseProducts(prisma: PrismaClient, ids: string[]): Promise<number> {
+  const { count } = await prisma.product.updateMany({
+    where: { id: { in: ids }, status: 'active' },
+    data: { status: 'paused_user' },
+  });
+  return count;
+}
+
+/**
+ * Resume the products in `ids` that are paused, as `resumeProduct` does one.
+ * Active ones are left alone: resuming them would only pull their next check
+ * forward. Returns how many were resumed.
+ */
+export async function resumeProducts(prisma: PrismaClient, ids: string[]): Promise<number> {
+  const { count } = await prisma.product.updateMany({
+    where: { id: { in: ids }, status: { in: ['paused_auto', 'paused_user'] } },
+    data: { status: 'active', consecutiveFailures: 0, nextCheckAt: new Date() },
+  });
+  return count;
+}
+
+/** What deletion destroys — shown in the FR-1.6 confirmation step. One product or many. */
 export async function deletionImpact(
   prisma: PrismaClient,
-  id: string,
+  id: string | string[],
 ): Promise<{ historyCount: number; alertCount: number }> {
+  const productId = typeof id === 'string' ? id : { in: id };
   const [historyCount, alertCount] = await Promise.all([
-    prisma.priceHistory.count({ where: { productId: id } }),
-    prisma.alert.count({ where: { productId: id } }),
+    prisma.priceHistory.count({ where: { productId } }),
+    prisma.alert.count({ where: { productId } }),
   ]);
   return { historyCount, alertCount };
 }
@@ -312,4 +339,10 @@ export async function deletionImpact(
 /** Hard delete; history and alerts cascade (FR-1.6). Confirmation is the caller's job. */
 export async function deleteProduct(prisma: PrismaClient, id: string): Promise<void> {
   await prisma.product.delete({ where: { id } });
+}
+
+/** `deleteProduct` for many at once. Returns how many were deleted. */
+export async function deleteProducts(prisma: PrismaClient, ids: string[]): Promise<number> {
+  const { count } = await prisma.product.deleteMany({ where: { id: { in: ids } } });
+  return count;
 }

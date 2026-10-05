@@ -17,7 +17,7 @@ import { OFFER_TYPE_LABELS } from '@pricepulse/shared';
 
 // ── Button ──────────────────────────────────────────────────────────────
 
-type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger';
+type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'danger-outline';
 type ButtonSize = 'sm' | 'md';
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
@@ -32,6 +32,8 @@ const VARIANT: Record<ButtonVariant, string> = {
   secondary: 'border border-line-strong bg-card text-fg hover:bg-surface-2',
   ghost: 'text-fg-muted hover:bg-surface-2 hover:text-fg',
   danger: 'bg-danger text-white hover:brightness-110 shadow-sm',
+  // A destructive action that sits among ordinary ones and asks before acting.
+  'danger-outline': 'border border-line-strong bg-card text-danger-fg hover:bg-danger-subtle',
 };
 const SIZE: Record<ButtonSize, string> = {
   sm: 'h-8 px-2.5 text-sm gap-1.5',

@@ -18,14 +18,17 @@ import { createDefaultRegistry } from '@pricepulse/adapters';
 import {
   ProductLimitError,
   deleteProduct,
+  deleteProducts,
   deletionImpact,
   capacityByMarketplace,
   getUserWithSettings,
   marketplaceHasLiveWorker,
   pauseProduct,
+  pauseProducts,
   registerProduct,
   resumeAllProducts,
   resumeProduct,
+  resumeProducts,
 } from '@pricepulse/core';
 import type { PreviewResult } from '@pricepulse/core';
 import {
@@ -139,6 +142,9 @@ const bulkEditSchema = z
   .refine((body) => body.priority !== undefined || body.categoryId !== undefined, {
     message: 'Say what to change: a priority, a category, or both',
   });
+
+/** The selection a bulk pause, resume or delete acts on; same batch limit as bulk edit. */
+const bulkIdsSchema = z.object({ ids: z.array(z.string().uuid()).min(1).max(1_000) });
 
 /**
  * Products with nothing to sort by — no price yet, no discount, never changed —
@@ -453,6 +459,40 @@ export class ProductsController {
       },
     });
     return { updated: count };
+  }
+
+  // Declared before the `:id` routes, which would otherwise take "bulk" for an id.
+
+  /** Pause the selected products that are being checked. */
+  @Post('bulk/pause')
+  @HttpCode(200)
+  async bulkPause(@Body() body: unknown) {
+    const { ids } = parseBody(bulkIdsSchema, body);
+    return { paused: await pauseProducts(this.prisma, ids) };
+  }
+
+  /** Resume the selected products that are paused, each checked again at once. */
+  @Post('bulk/resume')
+  @HttpCode(200)
+  async bulkResume(@Body() body: unknown) {
+    const { ids } = parseBody(bulkIdsSchema, body);
+    return { resumed: await resumeProducts(this.prisma, ids) };
+  }
+
+  /** Two-step like deleting one (FR-1.6): without ?confirm=true, only the impact. */
+  @Post('bulk/delete')
+  @HttpCode(200)
+  async bulkDelete(@Body() body: unknown, @Query('confirm') confirm?: string) {
+    const { ids } = parseBody(bulkIdsSchema, body);
+    const impact = await deletionImpact(this.prisma, ids);
+    if (confirm !== 'true') {
+      throw new BadRequestException({
+        message: 'Confirmation required: deleting removes all history and alerts',
+        impact,
+        confirmWith: 'POST ?confirm=true',
+      });
+    }
+    return { deleted: await deleteProducts(this.prisma, ids), ...impact };
   }
 
   @Get(':id')
