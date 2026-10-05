@@ -119,19 +119,23 @@ describe('recordCheck — a listing the marketplace moved', () => {
 
     expect(result.autoPaused).toBe(true); // an ordinary failure, counted
     expect(update.mock.calls[0]![0].data.canonicalUrl).toBeUndefined();
-    expect(detailOf(prisma)).toContain('not switched automatically: its title does not match');
+    expect(detailOf(prisma)).toContain(
+      `not switched automatically: the new listing's title ("${NAME.replace('24GB', '16GB').slice(0, 80)}") is not this product's`,
+    );
   });
 
   it('does not follow a product that was never read', async () => {
     const { prisma, update } = rig();
     await recordCheck(
       prisma,
-      tracked({ displayName: 'Awaiting first check — B0GWQC4JGJ' }),
+      tracked({ displayName: 'Awaiting first check — B0GWQC4JGJ', lastSuccessAt: null }),
       movedTo(NAME),
       settings,
       NOW,
     );
     expect(update.mock.calls[0]![0].data.canonicalUrl).toBeUndefined();
+    // Not a title mismatch: there is no title of its own to compare.
+    expect(detailOf(prisma)).toContain('this product has never been read');
   });
 
   it('does not take over a listing another product already tracks', async () => {

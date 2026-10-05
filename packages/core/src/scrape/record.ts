@@ -274,11 +274,15 @@ async function followMovedListing(
   moved: MovedListing,
   now: Date,
 ): Promise<{ followed: true } | { followed: false; reason: string }> {
-  if (!sameTitle(moved.name, product.displayName)) {
+  const theirs = `"${moved.name.slice(0, 80)}"`;
+  if (product.lastSuccessAt === null) {
     return {
       followed: false,
-      reason: `its title does not match this product's ("${moved.name.slice(0, 80)}")`,
+      reason: `this product has never been read, so there is no title to compare with the new listing's (${theirs})`,
     };
+  }
+  if (!sameTitle(moved.name, product.displayName)) {
+    return { followed: false, reason: `the new listing's title (${theirs}) is not this product's` };
   }
   const taken = await prisma.product.findUnique({
     where: { userId_canonicalUrl: { userId: product.userId, canonicalUrl: moved.canonicalUrl } },
