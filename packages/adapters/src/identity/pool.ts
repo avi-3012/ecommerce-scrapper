@@ -120,6 +120,13 @@ export interface AcquireOptions {
    * usable identity on another address sat idle.
    */
   usable?: (identity: Identity) => boolean;
+  /**
+   * Warm-ups into `site` are on hold after a block there. An identity that has
+   * not been there yet would be turned away at its warm-up, and the product it
+   * was given would wait a whole interval for a check that was never sent, so
+   * it is left out until the hold ends.
+   */
+  warmUpsOnHold?: boolean;
 }
 
 export class IdentityPool {
@@ -279,9 +286,11 @@ export class IdentityPool {
   acquire(options: AcquireOptions): Identity | null {
     const now = options.now ?? Date.now();
     this.reload();
-    const eligible = options.usable
-      ? this.eligible(now).filter(options.usable)
-      : this.eligible(now);
+    const eligible = this.eligible(now).filter(
+      (identity) =>
+        (options.usable?.(identity) ?? true) &&
+        !(options.warmUpsOnHold && this.needsWarmUp(identity, options.site)),
+    );
     if (eligible.length === 0) return null;
 
     // Per-request rotation: no incumbent, no stickiness. Every fetch goes to the

@@ -278,6 +278,12 @@ export class IdentityService implements OnModuleInit, OnModuleDestroy {
       // only produce a request refused at the gate a moment later, while a
       // usable identity on another address sat idle.
       usable: (candidate) => open.has(candidate.egressId ?? ''),
+      // After a block on this site, a fresh identity can only be turned away at
+      // its warm-up. On 5 Oct 2026 the replacement for a retired identity, never
+      // used and so first in line, was handed 20 checks in a row that way, each
+      // pushing its product back a whole interval. Until the hold ends a warmed
+      // identity takes the check, or the product stays due for the next cycle.
+      warmUpsOnHold: IdentitySession.warmUpsOnHold(site),
     });
     if (!identity) return null;
     return new IdentitySession(

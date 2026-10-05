@@ -244,6 +244,16 @@ export class IdentitySession {
   /** site → when it last hard-blocked, shared across every identity. */
   private static readonly siteBlockedAt = new Map<string, number>();
 
+  /**
+   * Whether warm-ups into `site` are on hold because it hard-blocked within the
+   * last SITE_WARMUP_COOLDOWN_MS. Selection asks, so that while they are, checks
+   * go to identities that have been there already.
+   */
+  static warmUpsOnHold(site: string, now: number = Date.now()): boolean {
+    const blockedAt = IdentitySession.siteBlockedAt.get(site);
+    return blockedAt !== undefined && now - blockedAt < SITE_WARMUP_COOLDOWN_MS;
+  }
+
   /** Drop an identity's connections entirely (retirement, shutdown). */
   static destroyAgent(identityId: string): void {
     const agent = IdentitySession.agents.get(identityId);
@@ -516,8 +526,8 @@ export class IdentitySession {
     // collect its own. 48 fresh identities each warming up into a marketplace
     // that just returned 529 produced 48 hard blocks in the same second and
     // drove the global backoff to its three-hour cap.
-    const blockedAt = IdentitySession.siteBlockedAt.get(site);
-    if (blockedAt && Date.now() - blockedAt < SITE_WARMUP_COOLDOWN_MS) {
+    if (IdentitySession.warmUpsOnHold(site)) {
+      const blockedAt = IdentitySession.siteBlockedAt.get(site)!;
       // Not attempted: WE declined, the marketplace was never asked. Counting
       // this against the product would charge it for the connection's caution
       // — and because one site-wide block silences warm-ups for ten minutes,
